@@ -67,7 +67,8 @@ export interface MeetingDetail {
     takeaways: SuggestionItem[];
     actionItems: ActionItem[];
     followUps: FollowUpItem[];
-    reviewedAt: string | null;
+    actionItemsReviewedAt: string | null;
+    followUpsReviewedAt: string | null;
   } | null;
 }
 
@@ -185,15 +186,18 @@ export interface SubmitReviewInput {
 
 export interface SubmitReviewResult {
   meetingId: string;
-  /** True if this save is what moved the meeting from needs_review to reviewed. */
-  justReviewed: boolean;
+  /** True if this save is what moved Action Items from needs_review to reviewed. */
+  justReviewedActionItems: boolean;
+  /** True if this save is what moved Follow-ups from needs_review to reviewed. */
+  justReviewedFollowUps: boolean;
   meeting: MeetingDetail;
 }
 
-// Submits picks/edits from the review UI. The first time a meeting is
-// reviewed (reviewedAt null -> set), the backend fires email/chat
-// notifications with only the approved items — later re-saves persist
-// normally without re-notifying.
+// Submits picks/edits from one review panel (Action Items or Follow-ups —
+// each saves independently, see MeetingDetail.vue). The first time THAT
+// category is reviewed (its own reviewed-at null -> set), the backend fires
+// email/chat notifications with whatever's currently approved — later
+// re-saves persist normally without re-notifying.
 export function submitMeetingReview(id: string, input: SubmitReviewInput): Promise<SubmitReviewResult> {
   return request(`/meetings/${id}/review`, { method: "POST", body: JSON.stringify(input) });
 }

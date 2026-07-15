@@ -8,11 +8,19 @@ import { resolveParticipantIds, type CaptureParticipantInput } from "../ingest/c
 
 // Three-state status the dashboard badges key off (added 2026-07-16 with the
 // suggest-then-approve workflow — see db/schema.ts's meeting_insights comment).
+// "reviewed" now requires BOTH action items and follow-ups to have been
+// saved at least once (changed 2026-07-15 alongside the per-category review
+// split — CODE-AUDIT.md items #2/#4) — takeaways aren't part of this since
+// they're auto-approved and have no review timestamp of their own.
 export type ReviewStatus = "pending" | "needs_review" | "reviewed";
 
-function computeReviewStatus(hasInsights: boolean, reviewedAt: Date | null): ReviewStatus {
+function computeReviewStatus(
+  hasInsights: boolean,
+  actionItemsReviewedAt: Date | null,
+  followUpsReviewedAt: Date | null
+): ReviewStatus {
   if (!hasInsights) return "pending";
-  return reviewedAt ? "reviewed" : "needs_review";
+  return actionItemsReviewedAt && followUpsReviewedAt ? "reviewed" : "needs_review";
 }
 
 // --- legacy-shape normalization (added 2026-07-16) --------------------------
@@ -125,7 +133,8 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
     .select({
       meetingId: schema.meetingInsights.meetingId,
       takeaways: schema.meetingInsights.takeaways,
-      reviewedAt: schema.meetingInsights.reviewedAt,
+      actionItemsReviewedAt: schema.meetingInsights.actionItemsReviewedAt,
+      followUpsReviewedAt: schema.meetingInsights.followUpsReviewedAt,
     })
     .from(schema.meetingInsights)
     .where(inArray(schema.meetingInsights.meetingId, meetingIds));
@@ -133,7 +142,10 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
   const reviewStatusByMeeting = new Map<string, ReviewStatus>();
   const takeawaysByMeeting = new Map<string, string[]>();
   for (const row of insightRows) {
-    reviewStatusByMeeting.set(row.meetingId, computeReviewStatus(true, row.reviewedAt));
+    reviewStatusByMeeting.set(
+      row.meetingId,
+      computeReviewStatus(true, row.actionItemsReviewedAt, row.followUpsReviewedAt)
+    );
     const approved = normalizeTakeaways(row.takeaways)
       .filter((t) => t.approved)
       .map((t) => t.text);
@@ -175,7 +187,8 @@ export interface MeetingDetail {
     takeaways: SuggestionItem[];
     actionItems: ActionItem[];
     followUps: FollowUpItem[];
-    reviewedAt: Date | null;
+    actionItemsReviewedAt: Date | null;
+    followUpsReviewedAt: Date | null;
   } | null;
 }
 
@@ -214,14 +227,19 @@ export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail
     source: meeting.source,
     participants: participantRows.map((p) => p.name ?? p.email ?? "Unknown"),
     transcript: transcript?.rawText ?? null,
-    reviewStatus: computeReviewStatus(Boolean(insights), insights?.reviewedAt ?? null),
+    reviewStatus: computeReviewStatus(
+      Boolean(insights),
+      insights?.actionItemsReviewedAt ?? null,
+      insights?.followUpsReviewedAt ?? null
+    ),
     insights: insights
       ? {
           keywords: insights.keywords ?? [],
           takeaways: normalizeTakeaways(insights.takeaways),
           actionItems: normalizeActionItems(insights.actionItems),
           followUps: normalizeFollowUps(insights.followUps),
-          reviewedAt: insights.reviewedAt,
+          actionItemsReviewedAt: insights.actionItemsReviewedAt,
+          followUpsReviewedAt: insights.followUpsReviewedAt,
         }
       : null,
   };
@@ -379,19 +397,37 @@ export interface UpdateMeetingInsightsInput {
   actionItems?: ActionItem[];
   followUps?: FollowUpItem[];
   /**
-   * When true, stamps reviewed_at = now() as part of this same update (see
-   * src/pipeline/reviewMeeting.ts, which is the only caller that sets this —
-   * it's what gates the notification send). Plain metadata/keyword edits
-   * from the dashboard's generic edit flow should leave this false/omitted.
+   * When true, stamps action_items_reviewed_at = now() as part of this same
+   * update (see src/pipeline/reviewMeeting.ts, the only caller that sets
+   * this — it's what gates that category's notification send). Split from a
+   * single markReviewed flag 2026-07-15 (CODE-AUDIT.md items #2/#3/#4) so a
+   * keywords-only call can no longer accidentally mark a category reviewed,
+   * and so Action Items/Follow-ups can be saved — and notified on — fully
+   * independently of each other.
    */
-  markReviewed?: boolean;
+  markActionItemsReviewed?: boolean;
+  /** Same as markActionItemsReviewed, but for follow_ups_reviewed_at. */
+  markFollowUpsReviewed?: boolean;
+  /**
+   * When true, resets action_items_reviewed_at back to null — used by
+   * regenerateCategory.ts when Action Items is regenerated, so a category
+   * that now holds fresh unapproved candidates stops being badged
+   * "reviewed" (CODE-AUDIT.md item #4). Mutually exclusive with
+   * markActionItemsReviewed in practice; if both were somehow set, mark
+   * wins since it's applied first below.
+   */
+  resetActionItemsReview?: boolean;
+  /** Same as resetActionItemsReview, but for follow_ups_reviewed_at. */
+  resetFollowUpsReview?: boolean;
 }
 
 export interface UpdateMeetingInsightsResult {
   /** false if the meeting doesn't exist at all — caller should 404. */
   found: boolean;
-  /** true only if THIS call is what moved reviewedAt from null to set. */
-  justReviewed: boolean;
+  /** true only if THIS call is what moved action_items_reviewed_at from null to set. */
+  justReviewedActionItems: boolean;
+  /** true only if THIS call is what moved follow_ups_reviewed_at from null to set. */
+  justReviewedFollowUps: boolean;
 }
 
 /**
@@ -410,10 +446,14 @@ export async function updateMeetingInsights(
       .from(schema.meetings)
       .where(eq(schema.meetings.id, meetingId))
       .limit(1);
-    if (!meeting) return { found: false, justReviewed: false };
+    if (!meeting) return { found: false, justReviewedActionItems: false, justReviewedFollowUps: false };
 
     const [existingInsights] = await tx
-      .select({ id: schema.meetingInsights.id, reviewedAt: schema.meetingInsights.reviewedAt })
+      .select({
+        id: schema.meetingInsights.id,
+        actionItemsReviewedAt: schema.meetingInsights.actionItemsReviewedAt,
+        followUpsReviewedAt: schema.meetingInsights.followUpsReviewedAt,
+      })
       .from(schema.meetingInsights)
       .where(eq(schema.meetingInsights.meetingId, meetingId))
       .orderBy(desc(schema.meetingInsights.generatedAt))
@@ -426,19 +466,28 @@ export async function updateMeetingInsights(
         takeaways: input.takeaways ?? [],
         actionItems: input.actionItems ?? [],
         followUps: input.followUps ?? [],
-        reviewedAt: input.markReviewed ? new Date() : null,
+        actionItemsReviewedAt: input.markActionItemsReviewed ? new Date() : null,
+        followUpsReviewedAt: input.markFollowUpsReviewed ? new Date() : null,
       });
-      return { found: true, justReviewed: Boolean(input.markReviewed) };
+      return {
+        found: true,
+        justReviewedActionItems: Boolean(input.markActionItemsReviewed),
+        justReviewedFollowUps: Boolean(input.markFollowUpsReviewed),
+      };
     }
 
-    const wasReviewed = existingInsights.reviewedAt !== null;
+    const actionItemsWasReviewed = existingInsights.actionItemsReviewedAt !== null;
+    const followUpsWasReviewed = existingInsights.followUpsReviewedAt !== null;
 
     const fieldsToUpdate: Partial<typeof schema.meetingInsights.$inferInsert> = {};
     if (input.keywords !== undefined) fieldsToUpdate.keywords = input.keywords;
     if (input.takeaways !== undefined) fieldsToUpdate.takeaways = input.takeaways;
     if (input.actionItems !== undefined) fieldsToUpdate.actionItems = input.actionItems;
     if (input.followUps !== undefined) fieldsToUpdate.followUps = input.followUps;
-    if (input.markReviewed) fieldsToUpdate.reviewedAt = new Date();
+    if (input.markActionItemsReviewed) fieldsToUpdate.actionItemsReviewedAt = new Date();
+    else if (input.resetActionItemsReview) fieldsToUpdate.actionItemsReviewedAt = null;
+    if (input.markFollowUpsReviewed) fieldsToUpdate.followUpsReviewedAt = new Date();
+    else if (input.resetFollowUpsReview) fieldsToUpdate.followUpsReviewedAt = null;
 
     if (Object.keys(fieldsToUpdate).length > 0) {
       await tx
@@ -447,7 +496,11 @@ export async function updateMeetingInsights(
         .where(eq(schema.meetingInsights.id, existingInsights.id));
     }
 
-    return { found: true, justReviewed: Boolean(input.markReviewed) && !wasReviewed };
+    return {
+      found: true,
+      justReviewedActionItems: Boolean(input.markActionItemsReviewed) && !actionItemsWasReviewed,
+      justReviewedFollowUps: Boolean(input.markFollowUpsReviewed) && !followUpsWasReviewed,
+    };
   });
 }
 

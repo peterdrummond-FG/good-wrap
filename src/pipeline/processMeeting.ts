@@ -84,10 +84,14 @@ export async function processMeeting(
       .delete(schema.transcriptChunks)
       .where(eq(schema.transcriptChunks.transcriptId, transcript.id));
 
-    // reviewedAt is deliberately omitted (defaults to null) — a fresh or
-    // re-run process always produces new unreviewed suggestions, even if the
-    // prior run had already been reviewed. See reviewMeeting.ts for what
-    // flips it back to non-null.
+    // actionItemsReviewedAt/followUpsReviewedAt are deliberately omitted
+    // (default to null) — a fresh or re-run process always produces new
+    // unreviewed suggestions in both categories, even if the prior run had
+    // already been fully reviewed. See reviewMeeting.ts for what flips these
+    // back to non-null. NOTE (CODE-AUDIT.md item #5): this means reprocessing
+    // an already-reviewed meeting silently discards its prior approvals —
+    // the "Reprocess meeting" button in MeetingDetail.vue now confirms with
+    // Peter before calling this when insights already exist.
     const [insightsRow] = await tx
       .insert(schema.meetingInsights)
       .values({

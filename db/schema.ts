@@ -39,6 +39,7 @@ import {
   timestamp,
   primaryKey,
   customType,
+  index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -123,6 +124,10 @@ export const meetings = pgTable("meetings", {
 
 // --- meeting_participants ----------------------------------------------------------
 // Join table: which people attended which meeting.
+// person_id gets its own index (added 2026-07-15, CODE-AUDIT.md item #7) —
+// the composite PK covers (meeting_id, person_id) lookups already since
+// meeting_id is the leading column, but a reverse lookup by person alone
+// (e.g. "which meetings has X attended") wasn't covered.
 export const meetingParticipants = pgTable(
   "meeting_participants",
   {
@@ -135,30 +140,43 @@ export const meetingParticipants = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.meetingId, table.personId] }),
+    personIdIdx: index("meeting_participants_person_id_idx").on(table.personId),
   })
 );
 
 // --- transcripts -------------------------------------------------------------------
-export const transcripts = pgTable("transcripts", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  meetingId: uuid("meeting_id")
-    .notNull()
-    .references(() => meetings.id, { onDelete: "cascade" }),
-  rawText: text("raw_text").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const transcripts = pgTable(
+  "transcripts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    meetingId: uuid("meeting_id")
+      .notNull()
+      .references(() => meetings.id, { onDelete: "cascade" }),
+    rawText: text("raw_text").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    meetingIdIdx: index("transcripts_meeting_id_idx").on(table.meetingId),
+  })
+);
 
 // --- transcript_chunks ---------------------------------------------------------------
 // Chunked + embedded transcript text, for pgvector similarity search (Stage 5).
-export const transcriptChunks = pgTable("transcript_chunks", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  transcriptId: uuid("transcript_id")
-    .notNull()
-    .references(() => transcripts.id, { onDelete: "cascade" }),
-  chunkIndex: integer("chunk_index").notNull(),
-  chunkText: text("chunk_text").notNull(),
-  embedding: vector("embedding"),
-});
+export const transcriptChunks = pgTable(
+  "transcript_chunks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    transcriptId: uuid("transcript_id")
+      .notNull()
+      .references(() => transcripts.id, { onDelete: "cascade" }),
+    chunkIndex: integer("chunk_index").notNull(),
+    chunkText: text("chunk_text").notNull(),
+    embedding: vector("embedding"),
+  },
+  (table) => ({
+    transcriptIdIdx: index("transcript_chunks_transcript_id_idx").on(table.transcriptId),
+  })
+);
 
 // --- meeting_insights -----------------------------------------------------------
 // Claude-generated keywords/takeaways/action-items/follow-ups (Stage 2 output).
@@ -167,15 +185,26 @@ export const transcriptChunks = pgTable("transcript_chunks", {
 // action_items, and follow_ups are now suggest-then-approve — Claude generates
 // 5-8 candidates per category (see extractInsights.ts) with `approved: false`,
 // and Peter picks which ones to keep (and can edit the text) on the meeting
-// detail page. `reviewedAt` is null until that review is saved at least once;
-// the dashboard's "needs review" badge and the notification gate (see
-// src/pipeline/reviewMeeting.ts) both key off this field. Keywords are NOT
-// part of this workflow — they stay fully automatic, no approval step.
+// detail page. Keywords are NOT part of this workflow — they stay fully
+// automatic, no approval step. Takeaways were later pulled out of this
+// workflow too (capped at exactly 5, auto-approved — see extractInsights.ts).
 //
 // Distinction between action items and follow-ups (Peter's framing): action
 // items are tasks Peter himself needs to do (no separate owner field needed);
 // follow-ups are tasks other people need to do, or reminders of unconfirmed
 // items — hence follow-ups keep a `person` field and action items don't.
+//
+// `reviewed_at` was originally a single meeting-wide column, but the review
+// UI added a Save button per category (Action Items, Follow-ups), so one
+// shared timestamp could no longer tell whether BOTH categories had actually
+// been reviewed — only whichever was saved first. Split 2026-07-15 (migration
+// `split_reviewed_at_per_category`, CODE-AUDIT.md items #2/#4) into
+// `action_items_reviewed_at`/`follow_ups_reviewed_at`, each null until that
+// category's own Save button is used at least once. The dashboard's 3-state
+// badge (see computeReviewStatus in queries.ts) now reports "reviewed" only
+// once both are set, and the notification gate (src/pipeline/reviewMeeting.ts)
+// fires once per category the first time IT transitions null -> set, instead
+// of once ever for the whole meeting.
 export type FollowUpTiming = "tomorrow" | "this_week" | "next_week" | "unspecified";
 
 // Takeaways: plain suggest/approve, no owner or timing concept.
@@ -200,31 +229,46 @@ export interface FollowUpItem {
   approved: boolean;
 }
 
-export const meetingInsights = pgTable("meeting_insights", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  meetingId: uuid("meeting_id")
-    .notNull()
-    .references(() => meetings.id, { onDelete: "cascade" }),
-  keywords: jsonb("keywords").$type<string[]>(),
-  takeaways: jsonb("takeaways").$type<SuggestionItem[]>(),
-  actionItems: jsonb("action_items").$type<ActionItem[]>(),
-  followUps: jsonb("follow_ups").$type<FollowUpItem[]>(),
-  // Null = suggestions generated but not yet reviewed/approved by Peter.
-  // Set = reviewed at least once (see reviewMeeting.ts for what flips this).
-  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
-  generatedAt: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const meetingInsights = pgTable(
+  "meeting_insights",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    meetingId: uuid("meeting_id")
+      .notNull()
+      .references(() => meetings.id, { onDelete: "cascade" }),
+    keywords: jsonb("keywords").$type<string[]>(),
+    takeaways: jsonb("takeaways").$type<SuggestionItem[]>(),
+    actionItems: jsonb("action_items").$type<ActionItem[]>(),
+    followUps: jsonb("follow_ups").$type<FollowUpItem[]>(),
+    // Null = suggestions generated but not yet reviewed/approved by Peter.
+    // Set = that category's Save button has been used at least once (see
+    // reviewMeeting.ts for what flips this, and regenerateCategory.ts, which
+    // resets the relevant one back to null when that category is refreshed).
+    actionItemsReviewedAt: timestamp("action_items_reviewed_at", { withTimezone: true }),
+    followUpsReviewedAt: timestamp("follow_ups_reviewed_at", { withTimezone: true }),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    meetingIdIdx: index("meeting_insights_meeting_id_idx").on(table.meetingId),
+  })
+);
 
 // --- notifications_log -------------------------------------------------------------
-export const notificationsLog = pgTable("notifications_log", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  meetingId: uuid("meeting_id")
-    .notNull()
-    .references(() => meetings.id, { onDelete: "cascade" }),
-  channel: notificationChannelEnum("channel").notNull(),
-  sentAt: timestamp("sent_at", { withTimezone: true }),
-  status: notificationStatusEnum("status").notNull().default("pending"),
-});
+export const notificationsLog = pgTable(
+  "notifications_log",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    meetingId: uuid("meeting_id")
+      .notNull()
+      .references(() => meetings.id, { onDelete: "cascade" }),
+    channel: notificationChannelEnum("channel").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    status: notificationStatusEnum("status").notNull().default("pending"),
+  },
+  (table) => ({
+    meetingIdIdx: index("notifications_log_meeting_id_idx").on(table.meetingId),
+  })
+);
 
 // --- relations (optional, for Drizzle's relational query API) ----------------------
 export const usersRelations = relations(users, ({ many }) => ({

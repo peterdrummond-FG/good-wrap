@@ -12,7 +12,7 @@
           dense
           no-caps
           :loading="processing"
-          @click="onProcess"
+          @click="confirmReprocess"
         />
         <q-btn outline color="primary" icon="edit" label="Edit" dense no-caps @click="startEdit" />
         <q-btn
@@ -477,11 +477,16 @@ function snapshotFollowUps(): string {
 const actionItemsDirty = computed(() => snapshotActionItems() !== actionItemsBaseline.value);
 const followUpsDirty = computed(() => snapshotFollowUps() !== followUpsBaseline.value);
 
+// Per-category now (changed 2026-07-15, CODE-AUDIT.md items #2/#4) — each
+// checks that category's OWN reviewed-at rather than the meeting-wide
+// reviewStatus, so Action Items can be sitting collapsed-and-reviewed while
+// Follow-ups is still showing its checklist (or vice versa), instead of the
+// whole-meeting status forcing both panels to stay in lockstep.
 const showActionItemsChecklist = computed(
-  () => meeting.value?.reviewStatus !== "reviewed" || editModeActionItems.value
+  () => !meeting.value?.insights?.actionItemsReviewedAt || editModeActionItems.value
 );
 const showFollowUpsChecklist = computed(
-  () => meeting.value?.reviewStatus !== "reviewed" || editModeFollowUps.value
+  () => !meeting.value?.insights?.followUpsReviewedAt || editModeFollowUps.value
 );
 const approvedActionItems = computed(() => (meeting.value?.insights?.actionItems ?? []).filter((a) => a.approved));
 const approvedFollowUps = computed(() => (meeting.value?.insights?.followUps ?? []).filter((f) => f.approved));
@@ -572,6 +577,18 @@ async function load() {
   }
 }
 
+// Refreshes meeting.value without touching the review working copies or
+// their dirty baselines. Used after a metadata-only save (topic/date/
+// participants/keywords), which never touches actionItems/followUps
+// server-side — calling the full load() there used to re-seed both review
+// columns from the server and silently discard any in-progress unsaved
+// checkbox edits sitting in either panel. Added 2026-07-15, CODE-AUDIT.md
+// item #6.
+async function refreshMeetingKeepingReviewEdits() {
+  const result = await fetchMeetingDetail(props.id);
+  meeting.value = result.meeting;
+}
+
 async function onProcess() {
   processing.value = true;
   error.value = "";
@@ -583,6 +600,26 @@ async function onProcess() {
   } finally {
     processing.value = false;
   }
+}
+
+// Reprocessing regenerates keywords/takeaways/action items/follow-ups from
+// scratch and resets both review flags to null (see processMeeting.ts) —
+// any approvals made so far are discarded with no way to recover them.
+// Only the "Reprocess meeting" button (shown once insights already exist)
+// goes through this confirm; the first-time "Process this meeting" button
+// (shown when there's nothing yet to lose) calls onProcess directly.
+// Added 2026-07-15, CODE-AUDIT.md item #5.
+function confirmReprocess() {
+  Dialog.create({
+    title: "Reprocess this meeting?",
+    message:
+      "This regenerates keywords, takeaways, action items, and follow-ups from scratch using a fresh AI pass. " +
+      "Any takeaways/action items/follow-ups you've already approved will be discarded, and the meeting will " +
+      "need to be reviewed again. This can't be undone.",
+    persistent: true,
+    ok: { label: "Reprocess", color: "primary", flat: true },
+    cancel: { label: "Cancel", flat: true },
+  }).onOk(onProcess);
 }
 
 // Saves ONLY this panel's category — the other category is omitted from the
@@ -600,7 +637,7 @@ async function onSaveActionItems() {
     editModeActionItems.value = false;
     Notify.create({
       type: "positive",
-      message: result.justReviewed ? "Reviewed — notifications sent" : "Action items saved",
+      message: result.justReviewedActionItems ? "Reviewed — notifications sent" : "Action items saved",
       timeout: 3000,
     });
   } catch (err) {
@@ -620,7 +657,7 @@ async function onSaveFollowUps() {
     editModeFollowUps.value = false;
     Notify.create({
       type: "positive",
-      message: result.justReviewed ? "Reviewed — notifications sent" : "Follow-ups saved",
+      message: result.justReviewedFollowUps ? "Reviewed — notifications sent" : "Follow-ups saved",
       timeout: 3000,
     });
   } catch (err) {
@@ -702,7 +739,7 @@ async function onSave() {
       }),
     ]);
     editing.value = false;
-    await load();
+    await refreshMeetingKeepingReviewEdits();
     Notify.create({ type: "positive", message: "Meeting updated", timeout: 3000 });
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);

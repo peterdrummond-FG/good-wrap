@@ -30,7 +30,13 @@ import { askQuestion } from "../qa/askQuestion";
 export function buildApp() {
   const app = Fastify({ logger: true });
 
-  app.register(cors, { origin: true });
+  // Locked to the Vite dev server origin (changed 2026-07-15, CODE-AUDIT.md
+  // item #8 — was origin: true, reflecting any request's Origin header,
+  // which combined with zero auth on every route below meant any website a
+  // browser visited could call this API). This is still a local-only POC,
+  // so localhost:5173 is the only origin that needs it; revisit this list
+  // once the dashboard/API are actually deployed somewhere reachable.
+  app.register(cors, { origin: ["http://localhost:5173"] });
 
   app.get("/api/meetings", async (_req, reply) => {
     const meetings = await listMeetings();
@@ -102,10 +108,10 @@ export function buildApp() {
   );
 
   // Generic insights edit — no notification side effects, doesn't touch
-  // reviewedAt. Used for e.g. fixing a keyword typo. The meeting detail
-  // page's review flow (picking/approving suggestions) goes through
-  // POST /api/meetings/:id/review below instead, since that action needs to
-  // gate notifications.
+  // either reviewed-at column. Used for e.g. fixing a keyword typo. The
+  // meeting detail page's review flow (picking/approving suggestions) goes
+  // through POST /api/meetings/:id/review below instead, since that action
+  // needs to gate notifications.
   app.patch<{ Params: { id: string }; Body: UpdateMeetingInsightsInput }>(
     "/api/meetings/:id/insights",
     async (req, reply) => {
@@ -123,11 +129,11 @@ export function buildApp() {
     }
   );
 
-  // Submit a review: persists which of the suggested takeaways/action
-  // items/follow-ups were approved (and any text edits), and — the first
-  // time this meeting's reviewedAt moves from null to set — fires the
-  // email/chat notifications with only the approved items. See
-  // src/pipeline/reviewMeeting.ts for the gating logic.
+  // Submit a review: persists ONE category's approved selections (Action
+  // Items or Follow-ups — see ReviewMeetingInput), and — the first time
+  // THAT category's own reviewed-at moves from null to set — fires the
+  // email/chat notifications with whatever's currently approved. See
+  // src/pipeline/reviewMeeting.ts for the per-category gating logic.
   app.post<{ Params: { id: string }; Body: ReviewMeetingInput }>(
     "/api/meetings/:id/review",
     async (req, reply) => {
@@ -160,8 +166,9 @@ export function buildApp() {
 
   // Regenerates ONE category (takeaways/actionItems/followUps) via a fresh
   // Claude call, triggered by the pencil icon on that category's review
-  // column. See regenerateCategory.ts — doesn't touch reviewedAt or fire
-  // notifications, and leaves the other two categories untouched.
+  // column. See regenerateCategory.ts — never fires notifications, and
+  // leaves the other two categories untouched (though it does reset that
+  // one category's own reviewed-at back to null for actionItems/followUps).
   app.post<{ Params: { id: string }; Body: { category?: RegenerateCategory } }>(
     "/api/meetings/:id/regenerate",
     async (req, reply) => {

@@ -9,7 +9,15 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    // Vite/esbuild does the actual build (via `vite build`) — `vue-tsc -b` in
+    // the build script is only meant to type-check, not emit. Without this,
+    // it writes a compiled .js next to every .ts/.vue source file in src/,
+    // which can silently shadow the real source at import resolution time
+    // (several imports here are extensionless). Added 2026-07-15 after a
+    // code audit caught a batch of stale .js files sitting in src/ (see
+    // CODE-AUDIT.md item #1) — one had even been committed to git.
+    "noEmit": true
   },
   "include": ["src/**/*.ts", "src/**/*.vue"]
 }

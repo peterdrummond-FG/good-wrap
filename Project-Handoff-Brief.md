@@ -303,3 +303,82 @@ npm run dev                          # starts Vite dashboard on :5173, proxies /
 ```
 
 Needs `ANTHROPIC_API_KEY` and `DATABASE_URL` in `.env` (see `.env.example`) — both already set up on Peter's machine as of this session. Open `http://localhost:5173` for the dashboard.
+
+---
+
+## 14. Session Update: Suggest-Then-Approve Review Workflow, Per-Panel Save, Full Code Audit (2026-07-15/16)
+
+This is the most recent, most load-bearing update — read this section fully before touching the review/notification code. Two companion docs live alongside this one: `Prompt-Tuning-Handoff.md` (superseded/resolved in-session, kept for history — the extraction prompt was reviewed against real output and confirmed good, no changes needed) and `CODE-AUDIT.md` (a full code audit; critical + moderate items are fixed as of this section, low-priority items are listed as still open below).
+
+### 14.1 The review workflow, as it stands today
+
+Meetings no longer get final takeaways/action items/follow-ups straight out of Claude. The flow is now suggest-then-approve, but with **different rules per category**:
+
+- **Takeaways**: Claude generates exactly 5 (not a range), and they're auto-approved — no checkbox, no selection UI, no "add your own" input. Peter validated the extraction prompt against real meeting output and confirmed 5 well-chosen takeaways is sufficient; if this ever needs revisiting, ask what's now falling short before changing the prompt (see `feedback_good_wrap_build_decisions` memory).
+- **Action Items** (things Peter himself needs to do — no separate owner field) and **Follow-ups** (things other people need to do, or reminders of unconfirmed items — keeps a `person` field): Claude generates 5-8 candidates each, all initially unapproved. Peter checks which ones to keep on the meeting detail page, can add his own via a free-text "add your own" row per column, and each category **saves and is reviewed completely independently of the other**.
+
+**Meeting detail page (`dashboard/src/views/MeetingDetail.vue`) layout:** three columns side by side under "Review suggestions" — Takeaways, Action Items, Follow-ups. Each has its own pencil icon that toggles an edit mode revealing a "Regenerate {category}" button (re-runs the full Claude extraction but only overwrites that one category — see `src/pipeline/regenerateCategory.ts`). Action Items/Follow-ups additionally show checkboxes + an add-your-own input while in "needs review" state (or while pencil-toggled open), and collapse to a plain bulleted list of approved items once that specific category has been reviewed. Metadata editing (topic/date/participants/keywords) is a completely separate "Edit" button/view, deliberately kept independent from the review columns.
+
+**Per-panel Save (added this session, replacing an earlier single "Save selections" button):** Action Items and Follow-ups each have their own Save button, directly in their column. It's disabled/grayed until that panel's working copy (checkbox states + any added items) differs from what's currently saved — tracked via a JSON-snapshot baseline (`actionItemsBaseline`/`followUpsBaseline`, compared via `actionItemsDirty`/`followUpsDirty` computeds in `MeetingDetail.vue`). Saving one panel only ever sends that one category to the backend (`submitMeetingReview`/`POST /api/meetings/:id/review`) and never touches the other panel's in-progress unsaved state. Regenerating one category similarly only resets that category's local working copy, never the other's.
+
+**Schema (`db/schema.ts`, `meeting_insights` table) as it stands today:**
+```
+id, meeting_id,
+keywords jsonb (string[], always automatic, no review),
+takeaways jsonb (SuggestionItem[] — always exactly 5, always approved:true),
+action_items jsonb (ActionItem[] — {text, timing, approved}),
+follow_ups jsonb (FollowUpItem[] — {text, person, timing, approved}),
+action_items_reviewed_at timestamptz (null until Action Items' own Save button used at least once),
+follow_ups_reviewed_at timestamptz (null until Follow-ups' own Save button used at least once),
+generated_at
+```
+Note there is **no single `reviewed_at` column anymore** — it was split into the two category-specific columns above on 2026-07-15 (migration `split_reviewed_at_per_category`) specifically because per-panel saving meant one shared flag could no longer answer "has *this* category been reviewed." The dashboard's 3-state badge (`pending`/`needs_review`/`reviewed`, `computeReviewStatus` in `src/server/queries.ts`) now reports "reviewed" only once **both** action_items_reviewed_at and follow_ups_reviewed_at are set.
+
+**Notifications** (`src/notify/sendNotifications.ts`, `src/pipeline/reviewMeeting.ts`): fire once per category, the first time *that category's* reviewed-at moves from null to set — not once per meeting. Each notification re-reads the whole `meeting_insights` row, so it includes whatever's currently approved across all categories at that moment. Practical implication Peter should know: if Action Items is reviewed/saved today and Follow-ups isn't touched until next week, that's two separate notifications, not one combined one — this was an explicit, accepted trade-off (see the code audit below) rather than an oversight.
+
+**Regenerating a category** (`src/pipeline/regenerateCategory.ts`) re-runs the full Claude extraction call but only persists the one requested category (takeaways/actionItems/followUps), leaving the other two + keywords untouched. For Action Items/Follow-ups, regenerating also resets *that* category's own reviewed-at back to null (so the dashboard badge correctly reflects "needs another look" instead of still claiming reviewed with stale unapproved candidates underneath). Never fires notifications.
+
+**Dashboard 4-panel home page** (`Dashboard.vue`): Meetings, Meetings Overview, Follow-ups, Action Items — each its own resizable/reorderable panel (nested `q-splitter`s, order+split-ratio persisted to `localStorage`). `ActionItemsPanel.vue` mirrors `FollowUpsPanel.vue`'s structure (grouped Tomorrow/This Week/Next Week/Other) but has no `person` field since action items are always Peter's own.
+
+### 14.2 Full code audit — done, critical + moderate fixed, low still open
+
+A full read-only code audit was run across backend, frontend, and security (`CODE-AUDIT.md` at the repo root has the full writeup). All **critical** and **moderate** items are now fixed:
+
+- Stale compiled `.js` files shadowing real `.ts`/`.vue` sources — fixed via `noEmit: true` in `dashboard/tsconfig.json` + broadened `.gitignore` (`dashboard/src/**/*.js`). **Peter still needs to run a one-time local cleanup** — see the exact commands given at the end of that conversation turn (`git rm --cached dashboard/src/dateBuckets.js`, `find dashboard/src -name "*.js" -delete`) if not already done.
+- Per-panel notification gap and the keywords-only-call-marks-reviewed bug — fixed via the per-category `action_items_reviewed_at`/`follow_ups_reviewed_at` split described in 14.1.
+- Regenerate leaving a stale "Reviewed" badge — fixed (regenerate now resets that category's own reviewed-at).
+- Reprocessing silently discarding all previously-approved items — fixed with a confirmation dialog (`confirmReprocess()` in `MeetingDetail.vue`) before the "Reprocess meeting" button runs; the first-time "Process this meeting" button (nothing to lose yet) still runs with no prompt.
+- Metadata edit save silently wiping unsaved review checkbox changes — fixed (`refreshMeetingKeepingReviewEdits()` replaces a full `load()` after a metadata-only save).
+- Missing indexes on FK columns — added (`meeting_insights.meeting_id`, `transcripts.meeting_id`, `transcript_chunks.transcript_id`, `notifications_log.meeting_id`, `meeting_participants.person_id`), and `db/schema.ts` now declares them via `index()` so the schema file matches the live DB (worth knowing: while doing this, discovered the live DB already had equivalently-named indexes on most of these columns that `db/schema.ts` had never documented — a pre-existing DB/schema-file drift, now reconciled, duplicates dropped).
+- Wide-open CORS (`origin: true`) — locked to `http://localhost:5173` (`src/server/app.ts`). **Will need revisiting** the moment the dashboard/API are reachable from anywhere but Peter's own machine (e.g. the Railway/Vercel hosting from Section 13) — that origin isn't in the allow-list yet.
+
+**Still open — low-priority items from the audit, not yet fixed (Peter's next ask):**
+- `listMeetings`'s dead `.filter((t) => t.approved)` on takeaways (can never remove anything now that takeaways are always auto-approved).
+- `SuggestionItem.approved` type is vestigial for takeaways (always true, nothing can set it false).
+- `meetings.zoomMeetingId` has no unique constraint (future duplicate-webhook risk once Stage 6 lands).
+- `.env.example` has a real value (`DEFAULT_OWNER_EMAIL=peter.drummond@flippengroup.com`) instead of a placeholder.
+- `SubmitReviewInput.keywords` (frontend type) is declared but no current caller sends it — dead field.
+- Two orphaned, unrouted dashboard views (`MeetingList.vue`, `FollowUpsOverview.vue`) — self-documented as intentionally inert.
+- No Fastify request-body schema validation — malformed input relies on downstream code throwing, caught per-route as a 400 with the raw error message exposed (fine for a personal tool talking only to its own dashboard).
+- Known accepted risks (not bugs, just flagged): no auth anywhere in the API (deliberate for this personal POC), prompt-injection surface via transcript text sent to Claude (limited in practice by forced tool-use constraining output to a fixed schema).
+
+**Also confirmed fixed independently of the audit:** the double-encoded `follow_ups` JSON quirk on meeting `a9d6e15d` (flagged 2026-07-16) is no longer present — that row now stores a proper array, likely resolved by a reprocess at some point.
+
+### 14.3 Verification done this session
+
+`npx tsc --noEmit` (root/backend) and `npx vue-tsc -b` (dashboard) both pass clean after every change described above. Live click-through in an actual browser has **not** been done in this sandbox (same network restriction as always — no direct route to `api.anthropic.com` or the Supabase pooler from here); worth a quick pass on Peter's machine, especially: saving Action Items and Follow-ups independently and confirming each other's in-progress edits survive, regenerating a category and confirming the *other* category's unsaved local edits survive, and triggering the reprocess confirmation dialog.
+
+### 14.4 Quick start (unchanged from Section 13, still accurate)
+
+```
+cd "good-wrap"
+npm install                          # root (backend/pipeline)
+npm run api                          # starts Fastify backend on :4000
+
+# in a second terminal
+cd dashboard
+npm install
+npm run dev                          # starts Vite dashboard on :5173, proxies /api to :4000
+```
+
+Needs `ANTHROPIC_API_KEY` and `DATABASE_URL` in `.env` — already set up on Peter's machine. Open `http://localhost:5173`. Note: the backend's CORS is now locked to `http://localhost:5173` specifically (see 14.2) — if the dev server is ever run on a different port, update `src/server/app.ts`'s allow-list to match.

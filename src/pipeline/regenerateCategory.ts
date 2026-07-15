@@ -1,8 +1,8 @@
 // Per-category regeneration (added 2026-07-16), triggered by the pencil icon
 // on each of the meeting detail page's three review columns. Re-runs the
 // same Claude extraction as Stage 2 (extractInsights) but only overwrites
-// ONE category in meeting_insights — the other two categories, keywords, and
-// reviewedAt are all left exactly as they were.
+// ONE category in meeting_insights — the other two categories and keywords
+// are left exactly as they were.
 //
 // Deliberately reuses the full extractInsights() call rather than building a
 // second, narrower tool schema for a single category: it's simpler and
@@ -11,13 +11,16 @@
 // trivial cost at personal scale. Worth revisiting if regenerate ends up
 // being used often enough for that to matter.
 //
-// This intentionally does NOT touch reviewedAt or fire notifications —
-// regenerating is just "give me a fresh candidate set to look at", not a
-// review/approval action. If the meeting was already reviewed, regenerating
-// action items or follow-ups will surface fresh unapproved candidates for
-// that one category while the rest of the meeting stays marked reviewed;
-// the dashboard's pencil-triggered edit view is what lets Peter re-approve
-// the new set via the existing "Save selections" flow.
+// This never fires notifications — regenerating is just "give me a fresh
+// candidate set to look at", not a review/approval action. For Action Items
+// and Follow-ups, though, it DOES reset that one category's own reviewed-at
+// back to null (changed 2026-07-15, CODE-AUDIT.md item #4): the fresh
+// candidates are unapproved, so leaving the old timestamp in place made the
+// dashboard's badge keep saying "reviewed" for a category that actually
+// needs a fresh look. Takeaways have no reviewed-at (they're auto-approved,
+// not part of the review workflow) so there's nothing to reset there.
+// The dashboard's pencil-triggered edit view is what lets Peter re-approve
+// the new set via that category's own Save button.
 
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db/client";
@@ -67,10 +70,16 @@ export async function regenerateInsightCategory(
       await updateMeetingInsights(meetingId, { takeaways: fresh.takeaways });
       break;
     case "actionItems":
-      await updateMeetingInsights(meetingId, { actionItems: fresh.actionItems });
+      await updateMeetingInsights(meetingId, {
+        actionItems: fresh.actionItems,
+        resetActionItemsReview: true,
+      });
       break;
     case "followUps":
-      await updateMeetingInsights(meetingId, { followUps: fresh.followUps });
+      await updateMeetingInsights(meetingId, {
+        followUps: fresh.followUps,
+        resetFollowUpsReview: true,
+      });
       break;
   }
 
