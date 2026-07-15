@@ -145,17 +145,12 @@
 
                   <template v-if="showActionItemsChecklist">
                     <q-scroll-area style="height: 320px">
-                      <q-item v-for="(a, i) in sortedReviewActionItems" :key="i" dense>
+                      <q-item v-for="(a, i) in reviewActionItems" :key="i" dense>
                         <q-item-section avatar top>
                           <q-checkbox v-model="a.approved" dense />
                         </q-item-section>
                         <q-item-section>
                           {{ a.text }}
-                          <div class="text-caption text-grey-7">
-                            <span class="bw-pill" :class="urgencyPillClass(a.urgency)">{{
-                              urgencyLabel(a.urgency)
-                            }}</span>
-                          </div>
                         </q-item-section>
                       </q-item>
                       <q-item v-if="!reviewActionItems.length" dense>
@@ -200,12 +195,7 @@
                   <template v-else>
                     <q-scroll-area style="height: 320px">
                       <ul class="bw-bullet-list">
-                        <li v-for="(a, i) in approvedActionItems" :key="i">
-                          {{ a.text }}
-                          <span class="bw-pill" :class="urgencyPillClass(a.urgency)">{{
-                            urgencyLabel(a.urgency)
-                          }}</span>
-                        </li>
+                        <li v-for="(a, i) in approvedActionItems" :key="i">{{ a.text }}</li>
                         <li v-if="!approvedActionItems.length" class="text-grey-6">(none approved)</li>
                       </ul>
                     </q-scroll-area>
@@ -444,11 +434,15 @@ const reviewFollowUps = ref<{ text: string; person: string | null; urgency: Urge
   []
 );
 
-// Suggestions are shown most-urgent-first (changed 2026-07-16, per Peter —
-// see urgency.ts). sortByUrgency returns a new array without touching item
+// Follow-ups are shown most-urgent-first (changed 2026-07-16, per Peter — see
+// urgency.ts). sortByUrgency returns a new array without touching item
 // identity, so the checkboxes here still bind to the same reactive objects
-// backing reviewActionItems/reviewFollowUps.
-const sortedReviewActionItems = computed(() => sortByUrgency(reviewActionItems.value));
+// backing reviewFollowUps. Action Items dropped urgency sorting/display
+// entirely (changed 2026-07-15 — Peter's original "just copyable, no
+// ranking" ask was scoped to the dashboard panel only at the time, but on
+// reflection he wants the review column unranked too, for consistency) —
+// reviewActionItems is used directly in the template, in whatever order the
+// API returned it.
 const sortedReviewFollowUps = computed(() => sortByUrgency(reviewFollowUps.value));
 const newActionItemText = ref("");
 const newFollowUpText = ref("");
@@ -504,7 +498,7 @@ const showFollowUpsChecklist = computed(
   () => !meeting.value?.insights?.followUpsReviewedAt || editModeFollowUps.value
 );
 const approvedActionItems = computed(() =>
-  sortByUrgency((meeting.value?.insights?.actionItems ?? []).filter((a) => a.approved))
+  (meeting.value?.insights?.actionItems ?? []).filter((a) => a.approved)
 );
 const approvedFollowUps = computed(() =>
   sortByUrgency((meeting.value?.insights?.followUps ?? []).filter((f) => f.approved))
