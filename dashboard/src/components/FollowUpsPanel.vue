@@ -44,24 +44,37 @@ const followUps = ref<FollowUpWithMeeting[]>([]);
 const loading = ref(true);
 const error = ref("");
 
+// Today/Tomorrow/This Week/Next Week/Other — mirrors Meetings Overview's
+// Today/Yesterday/This Week/Older grouping style (section-label dividers),
+// but forward-looking since a follow-up's timing is a prospective category
+// Claude assigns, not a computed date like a meeting's actual start time.
+// One bucket per FollowUpTiming value (db/schema.ts) so nothing is folded
+// into a vague catch-all unless it's genuinely "unspecified" — added 2026-07-16
+// per Peter's request, replacing the old Tomorrow/Next Week/Other-only view.
 const groups = computed(() => {
   const buckets = {
+    today: [] as FollowUpWithMeeting[],
     tomorrow: [] as FollowUpWithMeeting[],
+    thisWeek: [] as FollowUpWithMeeting[],
     nextWeek: [] as FollowUpWithMeeting[],
     other: [] as FollowUpWithMeeting[],
   };
 
   for (const f of followUps.value) {
-    if (f.timing === "tomorrow") buckets.tomorrow.push(f);
+    if (f.timing === "today") buckets.today.push(f);
+    else if (f.timing === "tomorrow") buckets.tomorrow.push(f);
+    else if (f.timing === "this_week") buckets.thisWeek.push(f);
     else if (f.timing === "next_week") buckets.nextWeek.push(f);
     else buckets.other.push(f);
   }
 
   return [
+    { label: "Today", items: buckets.today },
     { label: "Tomorrow", items: buckets.tomorrow },
+    { label: "This Week", items: buckets.thisWeek },
     { label: "Next Week", items: buckets.nextWeek },
-    // "this_week" and "unspecified" land here — not what Peter asked to see
-    // up front, but nothing should silently disappear.
+    // "unspecified" (no timing signal in the transcript) lands here —
+    // nothing should silently disappear.
     { label: "Other", items: buckets.other },
   ];
 });

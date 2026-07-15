@@ -89,11 +89,12 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
             },
             timing: {
               type: "string",
-              enum: ["tomorrow", "this_week", "next_week", "unspecified"],
+              enum: ["today", "tomorrow", "this_week", "next_week", "unspecified"],
               description:
-                "When this action item should happen, relative to the meeting date given below. " +
-                "Use \"unspecified\" unless the transcript actually gives a timing signal. Don't " +
-                "guess a timing that wasn't at least implied.",
+                "When this action item should happen, relative to the meeting date given below " +
+                "(\"today\" means the same day as the meeting itself). Use \"unspecified\" unless " +
+                "the transcript actually gives a timing signal. Don't guess a timing that wasn't " +
+                "at least implied.",
             },
           },
           required: ["text", "timing"],
@@ -125,13 +126,13 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
             },
             timing: {
               type: "string",
-              enum: ["tomorrow", "this_week", "next_week", "unspecified"],
+              enum: ["today", "tomorrow", "this_week", "next_week", "unspecified"],
               description:
                 "When this follow-up should happen, relative to the meeting date given below. " +
                 "Use \"unspecified\" unless the transcript actually gives a timing signal " +
-                "(e.g. \"let's touch base tomorrow\" -> tomorrow; \"circle back next week\" -> " +
-                "next_week; \"sometime this week\" -> this_week). Don't guess a timing that " +
-                "wasn't at least implied.",
+                "(e.g. \"let's circle back before we wrap up today\" -> today; \"let's touch base " +
+                "tomorrow\" -> tomorrow; \"circle back next week\" -> next_week; \"sometime this " +
+                "week\" -> this_week). Don't guess a timing that wasn't at least implied.",
             },
           },
           required: ["text", "person", "timing"],

@@ -35,7 +35,7 @@ function computeReviewStatus(
 // old meetings are immediately usable in the review UI without forcing a
 // reprocess first. Saving a review afterward (submitMeetingReview) writes the
 // row back out in the current shape, so this only ever matters for reads.
-const VALID_TIMINGS = new Set(["tomorrow", "this_week", "next_week", "unspecified"]);
+const VALID_TIMINGS = new Set(["today", "tomorrow", "this_week", "next_week", "unspecified"]);
 
 function normalizeTiming(value: unknown): FollowUpTiming {
   return typeof value === "string" && VALID_TIMINGS.has(value) ? (value as FollowUpTiming) : "unspecified";

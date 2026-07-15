@@ -205,7 +205,11 @@ export const transcriptChunks = pgTable(
 // once both are set, and the notification gate (src/pipeline/reviewMeeting.ts)
 // fires once per category the first time IT transitions null -> set, instead
 // of once ever for the whole meeting.
-export type FollowUpTiming = "tomorrow" | "this_week" | "next_week" | "unspecified";
+// "today" added 2026-07-16 alongside the Today/Tomorrow/This Week/Next Week/
+// Other panel restructure — previously the earliest bucket was "tomorrow",
+// so anything due the same day as the meeting had nowhere to go but
+// "unspecified".
+export type FollowUpTiming = "today" | "tomorrow" | "this_week" | "next_week" | "unspecified";
 
 // Takeaways: plain suggest/approve, no owner or timing concept.
 export interface SuggestionItem {

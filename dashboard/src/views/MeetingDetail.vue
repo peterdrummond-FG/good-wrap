@@ -499,7 +499,11 @@ function formatDate(iso: string): string {
 }
 
 function timingLabel(timing: string): string {
-  return { tomorrow: "Tomorrow", this_week: "This week", next_week: "Next week" }[timing] ?? "";
+  return (
+    { today: "Today", tomorrow: "Tomorrow", this_week: "This week", next_week: "Next week" }[
+      timing
+    ] ?? ""
+  );
 }
 
 function reviewStatusLabel(status: ReviewStatus): string {

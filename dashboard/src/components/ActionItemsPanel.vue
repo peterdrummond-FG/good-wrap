@@ -42,24 +42,32 @@ const actionItems = ref<ActionItemWithMeeting[]>([]);
 const loading = ref(true);
 const error = ref("");
 
+// Today/Tomorrow/This Week/Next Week/Other — same restructure as
+// FollowUpsPanel.vue (see comment there), applied 2026-07-16.
 const groups = computed(() => {
   const buckets = {
+    today: [] as ActionItemWithMeeting[],
     tomorrow: [] as ActionItemWithMeeting[],
+    thisWeek: [] as ActionItemWithMeeting[],
     nextWeek: [] as ActionItemWithMeeting[],
     other: [] as ActionItemWithMeeting[],
   };
 
   for (const a of actionItems.value) {
-    if (a.timing === "tomorrow") buckets.tomorrow.push(a);
+    if (a.timing === "today") buckets.today.push(a);
+    else if (a.timing === "tomorrow") buckets.tomorrow.push(a);
+    else if (a.timing === "this_week") buckets.thisWeek.push(a);
     else if (a.timing === "next_week") buckets.nextWeek.push(a);
     else buckets.other.push(a);
   }
 
   return [
+    { label: "Today", items: buckets.today },
     { label: "Tomorrow", items: buckets.tomorrow },
+    { label: "This Week", items: buckets.thisWeek },
     { label: "Next Week", items: buckets.nextWeek },
-    // "this_week" and "unspecified" land here — not what Peter asked to see
-    // up front, but nothing should silently disappear.
+    // "unspecified" (no timing signal in the transcript) lands here —
+    // nothing should silently disappear.
     { label: "Other", items: buckets.other },
   ];
 });

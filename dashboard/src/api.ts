@@ -16,7 +16,7 @@ export interface MeetingListItem {
   topTakeaways: string[];
 }
 
-export type FollowUpTiming = "tomorrow" | "this_week" | "next_week" | "unspecified";
+export type FollowUpTiming = "today" | "tomorrow" | "this_week" | "next_week" | "unspecified";
 
 // Takeaways: plain suggest/approve, no owner or timing concept.
 export interface SuggestionItem {
