@@ -59,9 +59,17 @@ export interface AskResult {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  // Only send Content-Type: application/json when there's actually a body.
+  // Fastify's default JSON body parser rejects a request that claims a JSON
+  // content-type but sends an empty body (FST_ERR_CTP_EMPTY_JSON_BODY) — hit
+  // by processMeeting()/askQuestion() callers with no payload, e.g. the
+  // "Reprocess meeting" button (POST with no body).
   const res = await fetch(`${API_BASE_URL}/api${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: {
+      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+      ...options?.headers,
+    },
   });
 
   const body = await res.json().catch(() => ({}));
