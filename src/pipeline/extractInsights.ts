@@ -23,6 +23,14 @@ export interface ExtractInsightsInput {
   // Claude can attribute a follow-up to an actual participant rather than
   // inventing or mis-transcribing a name.
   participantNames: string[];
+  // The meetings.owner_id user's name (see db/schema.ts) — i.e. who "Action
+  // Items" are for. Added 2026-07-16 after a live bug: without this, Claude
+  // has no way to know which participant name is "the meeting owner" from
+  // the system prompt's abstract "things the owner needs to do themselves"
+  // phrasing, so it defaulted to filing the owner's own tasks as follow-ups
+  // attributed to them by name instead of as action items. See the user
+  // message below and the SYSTEM_PROMPT's distinguishing paragraph.
+  ownerName: string;
 }
 
 // Action items/follow-ups are suggest-then-approve (2026-07-16) — Claude
@@ -82,6 +90,13 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
       },
       actionItems: {
         type: "array",
+        // Real schema constraints (not just prose) — added 2026-07-16 after
+        // a live bug where Claude returned zero action items for a meeting
+        // that clearly had several (misclassified as follow-ups instead;
+        // see the "Meeting owner" fix in the user message below). These are
+        // a backstop on top of that fix, not a replacement for it.
+        minItems: 5,
+        maxItems: 8,
         items: {
           type: "object",
           properties: {
@@ -113,6 +128,8 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
       },
       followUps: {
         type: "array",
+        minItems: 5,
+        maxItems: 8,
         items: {
           type: "object",
           properties: {
@@ -157,9 +174,13 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
 const SYSTEM_PROMPT =
   "You extract structured notes from a meeting transcript. Ground every point in what was " +
   "actually said in the transcript — don't infer motivation, diagnose, or invent details not " +
-  "present in the text. Distinguish action items (things the meeting owner needs to do " +
-  "themselves) from follow-ups (things other people need to do, or unconfirmed items worth a " +
-  "reminder) — don't put the same task in both categories. For each action item or follow-up, " +
+  "present in the text. The user message names the meeting owner. Distinguish action items " +
+  "(things the meeting OWNER needs to do themselves — including when a task is clearly the " +
+  "owner's own responsibility, even though the owner is also listed as a participant) from " +
+  "follow-ups (things any OTHER participant needs to do, or unconfirmed items worth a " +
+  "reminder). A task belonging to the meeting owner always goes in Action Items, never in " +
+  "Follow-ups with the owner's name as the person — don't put the same task in both " +
+  "categories. For each action item or follow-up, " +
   "assign urgency based on genuine signals in the transcript (explicit urgency language, or how " +
   "the item was actually framed) — default to \"medium\" rather than forcing \"high\" or \"low\" " +
   "without real support. For follow-ups, only assign a person when the transcript actually " +
@@ -201,6 +222,10 @@ export async function extractInsights(
               `Meeting: ${input.topic}\n` +
               `Meeting date: ${input.meetingDate}\n` +
               `Participants: ${input.participants}\n` +
+              `Meeting owner: ${input.ownerName} (this is who Action Items are for — if ` +
+              `${input.ownerName} is also mentioned as a participant elsewhere, tasks that are ` +
+              `their own responsibility still belong in Action Items, not a Follow-up with ` +
+              `them as the person)\n` +
               `Participant names (use exactly these for a follow-up's "person", or null): ` +
               `${input.participantNames.join(", ") || "(none recorded)"}\n\n` +
               `Transcript:\n${input.transcript}`,

@@ -17,6 +17,7 @@ import { db, schema } from "../db/client";
 import { extractInsights } from "./extractInsights";
 import { embedChunks } from "./embedChunks";
 import { chunkTranscript } from "./chunkText";
+import { getMeetingOwner } from "../server/queries";
 
 export interface ProcessMeetingResult {
   meetingId: string;
@@ -42,6 +43,17 @@ export async function processMeeting(
     .limit(1);
   if (!meeting) {
     throw new Error(`No meeting found for id ${meetingId}`);
+  }
+
+  // Needed so extractInsights can tell Claude which participant name is the
+  // meeting owner (see that module's comment — without this, the owner's
+  // own tasks get misfiled as follow-ups instead of action items). Goes
+  // through the shared getMeetingOwner helper (see queries.ts) rather than
+  // a local owner_id->users join, so this and regenerateCategory.ts can't
+  // drift out of sync on how "the owner" is resolved.
+  const owner = await getMeetingOwner(meetingId);
+  if (!owner) {
+    throw new Error(`No owner found for meeting ${meetingId}`);
   }
 
   const [transcript] = await db
@@ -70,6 +82,7 @@ export async function processMeeting(
     transcript: transcript.rawText,
     meetingDate: meeting.startTime.toISOString(),
     participantNames,
+    ownerName: owner.name,
   });
 
   const chunks = chunkTranscript(transcript.rawText);

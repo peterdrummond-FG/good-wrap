@@ -25,7 +25,7 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db/client";
 import { extractInsights } from "./extractInsights";
-import { updateMeetingInsights, getMeetingDetail, type MeetingDetail } from "../server/queries";
+import { updateMeetingInsights, getMeetingDetail, getMeetingOwner, type MeetingDetail } from "../server/queries";
 
 export type RegenerateCategory = "takeaways" | "actionItems" | "followUps";
 
@@ -49,6 +49,13 @@ export async function regenerateInsightCategory(
     throw new Error(`No transcript found for meeting ${meetingId}`);
   }
 
+  // See processMeeting.ts's identical lookup — same reason, and same shared
+  // helper so the two can't drift out of sync.
+  const owner = await getMeetingOwner(meetingId);
+  if (!owner) {
+    throw new Error(`No owner found for meeting ${meetingId}`);
+  }
+
   const participantRows = await db
     .select({ name: schema.people.name, email: schema.people.email })
     .from(schema.meetingParticipants)
@@ -63,6 +70,7 @@ export async function regenerateInsightCategory(
     transcript: transcript.rawText,
     meetingDate: meeting.startTime.toISOString(),
     participantNames,
+    ownerName: owner.name,
   });
 
   switch (category) {

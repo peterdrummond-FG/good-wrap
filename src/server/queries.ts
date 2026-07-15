@@ -88,6 +88,62 @@ export function normalizeFollowUps(raw: unknown): FollowUpItem[] {
     .filter((f) => f.text.trim());
 }
 
+// --- "who is the user" — single source of truth --------------------------
+// Added 2026-07-16 after a live bug where the Claude extraction pipeline had
+// no way to know which participant name was "the meeting owner", because
+// nothing told it — the concept only existed implicitly via
+// meetings.owner_id. Rather than let every future feature that needs to
+// know "the user" (email/chat notification recipients, extraction, any
+// future personalization) re-derive this independently — and risk drifting
+// out of sync the way extraction did — this is the one place that resolves
+// it. Callers should always go through these, never read
+// process.env.DEFAULT_OWNER_EMAIL or re-join meetings->users themselves.
+export interface MeetingOwner {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/** Resolves a specific meeting's owner via meetings.owner_id -> users. Used
+ * by the extraction pipeline (processMeeting.ts, regenerateCategory.ts) and,
+ * eventually, by real email/chat notification senders once a provider is
+ * chosen. Returns null if the meeting doesn't exist (the owner_id FK means
+ * a resolved meeting should always have a valid owner). */
+export async function getMeetingOwner(meetingId: string): Promise<MeetingOwner | null> {
+  const [row] = await db
+    .select({
+      id: schema.users.id,
+      name: schema.users.name,
+      email: schema.users.email,
+    })
+    .from(schema.meetings)
+    .innerJoin(schema.users, eq(schema.users.id, schema.meetings.ownerId))
+    .where(eq(schema.meetings.id, meetingId))
+    .limit(1);
+  return row ?? null;
+}
+
+/** The dashboard's implicit "current user" — there's no real auth yet (this
+ * is a personal-use POC, see CODE-AUDIT.md), so "signed in" just means
+ * whichever user DEFAULT_OWNER_EMAIL points at. Backs GET /api/me, which
+ * exists so that assumption is visible in the UI ("Signed in as X") instead
+ * of buried in an env var nothing ever surfaces. Returns null if the env var
+ * is unset or doesn't resolve to a real users row. */
+export async function getCurrentUser(): Promise<MeetingOwner | null> {
+  const email = process.env.DEFAULT_OWNER_EMAIL;
+  if (!email) return null;
+  const [row] = await db
+    .select({
+      id: schema.users.id,
+      name: schema.users.name,
+      email: schema.users.email,
+    })
+    .from(schema.users)
+    .where(eq(schema.users.email, email))
+    .limit(1);
+  return row ?? null;
+}
+
 export interface MeetingListItem {
   id: string;
   topic: string;

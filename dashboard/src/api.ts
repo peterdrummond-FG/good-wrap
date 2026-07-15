@@ -117,6 +117,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return body as T;
 }
 
+// Added 2026-07-16 alongside GET /api/me (see app.ts) — not real auth, just
+// a way to surface the dashboard's existing implicit "current user"
+// assumption (DEFAULT_OWNER_EMAIL) in the UI instead of it being invisible.
+export interface CurrentUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export function fetchCurrentUser(): Promise<{ user: CurrentUser }> {
+  return request("/me");
+}
+
 export function fetchMeetings(): Promise<{ meetings: MeetingListItem[] }> {
   return request("/meetings");
 }

@@ -12,6 +12,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
   deleteMeeting,
+  getCurrentUser,
   getMeetingDetail,
   listActionItems,
   listFollowUps,
@@ -50,6 +51,21 @@ export function buildApp() {
     .map((o) => o.trim())
     .filter(Boolean);
   app.register(cors, { origin: [...defaultOrigins, ...extraOrigins] });
+
+  // Added 2026-07-16 — not auth (this stays a no-auth personal POC), just a
+  // way to make the existing implicit "current user" assumption
+  // (DEFAULT_OWNER_EMAIL, see queries.ts's getCurrentUser) visible in the UI
+  // instead of buried in an env var nothing ever surfaces. Lets the
+  // dashboard show "Signed in as X" and gives any future feature that needs
+  // "who is the user" one place to ask, rather than re-reading the env var
+  // directly and risking drift the way Claude extraction once did.
+  app.get("/api/me", async (_req, reply) => {
+    const user = await getCurrentUser();
+    if (!user) {
+      return reply.code(404).send({ error: "No current user — DEFAULT_OWNER_EMAIL is unset or invalid." });
+    }
+    return reply.send({ user });
+  });
 
   app.get("/api/meetings", async (_req, reply) => {
     const meetings = await listMeetings();
