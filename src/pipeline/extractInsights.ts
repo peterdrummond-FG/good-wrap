@@ -179,8 +179,10 @@ const SYSTEM_PROMPT =
   "owner's own responsibility, even though the owner is also listed as a participant) from " +
   "follow-ups (things any OTHER participant needs to do, or unconfirmed items worth a " +
   "reminder). A task belonging to the meeting owner always goes in Action Items, never in " +
-  "Follow-ups with the owner's name as the person — don't put the same task in both " +
-  "categories. For each action item or follow-up, " +
+  "Follow-ups with the owner's name as the person, and — critically — never OMITTED either: " +
+  "moving a task out of Follow-ups because it belongs to the owner means it MUST show up in " +
+  "Action Items instead, not disappear. Don't put the same task in both categories. For each " +
+  "action item or follow-up, " +
   "assign urgency based on genuine signals in the transcript (explicit urgency language, or how " +
   "the item was actually framed) — default to \"medium\" rather than forcing \"high\" or \"low\" " +
   "without real support. For follow-ups, only assign a person when the transcript actually " +
@@ -259,18 +261,43 @@ export async function extractInsights(
         return [];
       };
 
+      const actionItems = toArray<RawActionItem>(result.actionItems, "actionItems").map((item) => ({
+        ...item,
+        approved: false,
+      }));
+      const followUps = toArray<RawFollowUp>(result.followUps, "followUps").map((item) => ({
+        ...item,
+        approved: false,
+      }));
+
+      // The tool schema's minItems: 5 (see above) turned out NOT to be a
+      // hard guarantee either — hit live (2026-07-16) where Claude correctly
+      // stopped misfiling the owner's own tasks as follow-ups (per the
+      // "Meeting owner" fix above) but then just dropped them instead of
+      // moving them to Action Items, returning 0 despite the schema asking
+      // for 5-8 and the system prompt explicitly saying under-generating is
+      // worse than over-generating for these two categories. Treat that as
+      // a retryable failure rather than a valid "no items" result — a
+      // meeting legitimately having zero owner tasks or zero follow-ups is
+      // implausible given how these are defined, so this only ever fires on
+      // genuine under-generation, not real sparse meetings.
+      if (actionItems.length === 0) {
+        throw new Error(
+          "Claude returned 0 action items despite the schema requiring 5-8 — treating as under-generation, not a real empty result."
+        );
+      }
+      if (followUps.length === 0) {
+        throw new Error(
+          "Claude returned 0 follow-ups despite the schema requiring 5-8 — treating as under-generation, not a real empty result."
+        );
+      }
+
       return {
         keywords: toArray<string>(result.keywords, "keywords"),
         // Takeaways: no review step — always approved (see the type comment above).
         takeaways: toArray<string>(result.takeaways, "takeaways").map((text) => ({ text, approved: true })),
-        actionItems: toArray<RawActionItem>(result.actionItems, "actionItems").map((item) => ({
-          ...item,
-          approved: false,
-        })),
-        followUps: toArray<RawFollowUp>(result.followUps, "followUps").map((item) => ({
-          ...item,
-          approved: false,
-        })),
+        actionItems,
+        followUps,
       };
     },
     {
