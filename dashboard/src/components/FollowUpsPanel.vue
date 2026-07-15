@@ -1,8 +1,27 @@
 <template>
   <div class="bw-panel column">
-    <div class="bw-panel__header">
-      <div class="bw-panel__title">Follow-ups</div>
-      <div class="bw-panel__subtitle">Approved follow-ups, and with who</div>
+    <div class="bw-panel__header row items-center justify-between">
+      <div>
+        <div class="bw-panel__title">Follow-ups</div>
+        <div class="bw-panel__subtitle">Approved follow-ups, and with who</div>
+      </div>
+      <!-- Urgency (default) vs Person grouping — added 2026-07-16 per Peter's
+           request for a "by person" view. Lives as a toggle inside this same
+           panel rather than a separate column, to keep the dashboard at 3
+           columns. -->
+      <q-btn-toggle
+        v-model="groupMode"
+        dense
+        no-caps
+        unelevated
+        toggle-color="primary"
+        color="grey-9"
+        text-color="grey-4"
+        :options="[
+          { label: 'Urgency', value: 'urgency' },
+          { label: 'Person', value: 'person' },
+        ]"
+      />
     </div>
 
     <q-banner v-if="error" class="bg-red-1 text-red-9 q-ma-sm" rounded dense>
@@ -12,7 +31,10 @@
     <div class="bw-panel__body col">
       <template v-for="group in groups" :key="group.label">
         <template v-if="group.items.length">
-          <div class="bw-section-label">{{ group.label }}</div>
+          <div class="bw-section-label">
+            <PersonTag v-if="groupMode === 'person' && group.isPerson" :name="group.label" />
+            <template v-else>{{ group.label }}</template>
+          </div>
           <router-link
             v-for="(f, i) in group.items"
             :key="i"
@@ -21,7 +43,20 @@
           >
             <div class="bw-row__title">{{ f.text }}</div>
             <div class="bw-row__meta">
-              <span v-if="f.person">with {{ f.person }} · </span>{{ f.meetingTopic }}
+              <!-- Urgency mode: who it's with (urgency is already conveyed by
+                   the section label). Person mode: the reverse — urgency pill
+                   per item, since grouping no longer shows it. -->
+              <template v-if="groupMode === 'urgency'">
+                <span v-if="f.person"
+                  >with <PersonTag :name="f.person" /> · </span
+                >{{ f.meetingTopic }}
+              </template>
+              <template v-else>
+                <span class="bw-pill" :class="urgencyPillClass(f.urgency)">{{
+                  urgencyLabel(f.urgency)
+                }}</span>
+                · {{ f.meetingTopic }}
+              </template>
             </div>
           </router-link>
         </template>
@@ -39,45 +74,64 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { fetchFollowUps, type FollowUpWithMeeting } from "../api";
+import { urgencyLabel, urgencyPillClass } from "../urgency";
+import PersonTag from "./PersonTag.vue";
 
 const followUps = ref<FollowUpWithMeeting[]>([]);
 const loading = ref(true);
 const error = ref("");
+const groupMode = ref<"urgency" | "person">("urgency");
 
-// Today/Tomorrow/This Week/Next Week/Other — mirrors Meetings Overview's
-// Today/Yesterday/This Week/Older grouping style (section-label dividers),
-// but forward-looking since a follow-up's timing is a prospective category
-// Claude assigns, not a computed date like a meeting's actual start time.
-// One bucket per FollowUpTiming value (db/schema.ts) so nothing is folded
-// into a vague catch-all unless it's genuinely "unspecified" — added 2026-07-16
-// per Peter's request, replacing the old Tomorrow/Next Week/Other-only view.
-const groups = computed(() => {
+interface Group {
+  label: string;
+  items: FollowUpWithMeeting[];
+  /** True for a real person-name group (so we know to render a PersonTag for
+   * the label); false for "Unassigned" and for the urgency-mode labels. */
+  isPerson: boolean;
+}
+
+const urgencyGroups = computed<Group[]>(() => {
   const buckets = {
-    today: [] as FollowUpWithMeeting[],
-    tomorrow: [] as FollowUpWithMeeting[],
-    thisWeek: [] as FollowUpWithMeeting[],
-    nextWeek: [] as FollowUpWithMeeting[],
-    other: [] as FollowUpWithMeeting[],
+    high: [] as FollowUpWithMeeting[],
+    medium: [] as FollowUpWithMeeting[],
+    low: [] as FollowUpWithMeeting[],
   };
-
-  for (const f of followUps.value) {
-    if (f.timing === "today") buckets.today.push(f);
-    else if (f.timing === "tomorrow") buckets.tomorrow.push(f);
-    else if (f.timing === "this_week") buckets.thisWeek.push(f);
-    else if (f.timing === "next_week") buckets.nextWeek.push(f);
-    else buckets.other.push(f);
-  }
-
+  for (const f of followUps.value) buckets[f.urgency].push(f);
   return [
-    { label: "Today", items: buckets.today },
-    { label: "Tomorrow", items: buckets.tomorrow },
-    { label: "This Week", items: buckets.thisWeek },
-    { label: "Next Week", items: buckets.nextWeek },
-    // "unspecified" (no timing signal in the transcript) lands here —
-    // nothing should silently disappear.
-    { label: "Other", items: buckets.other },
+    { label: "High", items: buckets.high, isPerson: false },
+    { label: "Medium", items: buckets.medium, isPerson: false },
+    { label: "Low", items: buckets.low, isPerson: false },
   ];
 });
+
+// Alphabetical by person, with a final "Unassigned" bucket for follow-ups
+// with no identifiable person — nothing should silently disappear just
+// because it wasn't attributable to someone.
+const personGroups = computed<Group[]>(() => {
+  const byPerson = new Map<string, FollowUpWithMeeting[]>();
+  const unassigned: FollowUpWithMeeting[] = [];
+
+  for (const f of followUps.value) {
+    if (!f.person) {
+      unassigned.push(f);
+      continue;
+    }
+    const list = byPerson.get(f.person) ?? [];
+    list.push(f);
+    byPerson.set(f.person, list);
+  }
+
+  const names = [...byPerson.keys()].sort((a, b) => a.localeCompare(b));
+  const groups: Group[] = names.map((name) => ({
+    label: name,
+    items: byPerson.get(name)!,
+    isPerson: true,
+  }));
+  groups.push({ label: "Unassigned", items: unassigned, isPerson: false });
+  return groups;
+});
+
+const groups = computed(() => (groupMode.value === "urgency" ? urgencyGroups.value : personGroups.value));
 
 onMounted(async () => {
   try {

@@ -205,13 +205,15 @@ export const transcriptChunks = pgTable(
 // once both are set, and the notification gate (src/pipeline/reviewMeeting.ts)
 // fires once per category the first time IT transitions null -> set, instead
 // of once ever for the whole meeting.
-// "today" added 2026-07-16 alongside the Today/Tomorrow/This Week/Next Week/
-// Other panel restructure — previously the earliest bucket was "tomorrow",
-// so anything due the same day as the meeting had nowhere to go but
-// "unspecified".
-export type FollowUpTiming = "today" | "tomorrow" | "this_week" | "next_week" | "unspecified";
+// Replaced "timing" (today/tomorrow/this_week/next_week/unspecified) with
+// "urgency" 2026-07-16 per Peter's request — he wanted suggested action
+// items/follow-ups grouped by how urgent they are, not by when the
+// transcript implied they'd happen. "medium" is the default absent any
+// genuine urgency signal (unlike timing's "unspecified", there's no need for
+// a 4th "unknown" bucket — everything defaults to a real, sortable value).
+export type Urgency = "high" | "medium" | "low";
 
-// Takeaways: plain suggest/approve, no owner or timing concept.
+// Takeaways: plain suggest/approve, no owner or urgency concept.
 export interface SuggestionItem {
   text: string;
   approved: boolean;
@@ -220,7 +222,7 @@ export interface SuggestionItem {
 // Action items: things Peter needs to do himself.
 export interface ActionItem {
   text: string;
-  timing: FollowUpTiming;
+  urgency: Urgency;
   approved: boolean;
 }
 
@@ -229,7 +231,7 @@ export interface ActionItem {
 export interface FollowUpItem {
   text: string;
   person: string | null;
-  timing: FollowUpTiming;
+  urgency: Urgency;
   approved: boolean;
 }
 

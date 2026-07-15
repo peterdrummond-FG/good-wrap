@@ -19,7 +19,12 @@
             <div class="bw-row__title">{{ m.topic }}</div>
             <div class="bw-row__meta">
               {{ formatDate(m.startTime) }}
-              <span v-if="m.participants.length"> · {{ m.participants.join(", ") }}</span>
+              <span v-if="m.participants.length">
+                ·
+                <template v-for="(p, i) in m.participants" :key="p"
+                  ><PersonTag :name="p" /><span v-if="i < m.participants.length - 1">, </span></template
+                >
+              </span>
             </div>
           </div>
           <span class="bw-pill" :class="pillClass(m.reviewStatus)">{{ pillLabel(m.reviewStatus) }}</span>
@@ -38,6 +43,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { fetchMeetings, type MeetingListItem, type ReviewStatus } from "../api";
+import PersonTag from "./PersonTag.vue";
 
 const meetings = ref<MeetingListItem[]>([]);
 const loading = ref(true);

@@ -3,7 +3,7 @@
 
 import { desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/client";
-import type { ActionItem, FollowUpItem, FollowUpTiming, SuggestionItem } from "../../db/schema";
+import type { ActionItem, FollowUpItem, SuggestionItem, Urgency } from "../../db/schema";
 import { resolveParticipantIds, type CaptureParticipantInput } from "../ingest/captureManualMeeting";
 
 // Three-state status the dashboard badges key off (added 2026-07-16 with the
@@ -35,10 +35,10 @@ function computeReviewStatus(
 // old meetings are immediately usable in the review UI without forcing a
 // reprocess first. Saving a review afterward (submitMeetingReview) writes the
 // row back out in the current shape, so this only ever matters for reads.
-const VALID_TIMINGS = new Set(["today", "tomorrow", "this_week", "next_week", "unspecified"]);
+const VALID_URGENCY = new Set(["high", "medium", "low"]);
 
-function normalizeTiming(value: unknown): FollowUpTiming {
-  return typeof value === "string" && VALID_TIMINGS.has(value) ? (value as FollowUpTiming) : "unspecified";
+function normalizeUrgency(value: unknown): Urgency {
+  return typeof value === "string" && VALID_URGENCY.has(value) ? (value as Urgency) : "medium";
 }
 
 // Takeaways no longer go through a review step (changed 2026-07-16, per
@@ -61,11 +61,11 @@ export function normalizeActionItems(raw: unknown): ActionItem[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item): ActionItem => {
-      if (typeof item === "string") return { text: item, timing: "unspecified", approved: false };
+      if (typeof item === "string") return { text: item, urgency: "medium", approved: false };
       const obj = item as Partial<ActionItem> | null;
       return {
         text: String(obj?.text ?? ""),
-        timing: normalizeTiming(obj?.timing),
+        urgency: normalizeUrgency(obj?.urgency),
         approved: Boolean(obj?.approved),
       };
     })
@@ -76,12 +76,12 @@ export function normalizeFollowUps(raw: unknown): FollowUpItem[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item): FollowUpItem => {
-      if (typeof item === "string") return { text: item, person: null, timing: "unspecified", approved: false };
+      if (typeof item === "string") return { text: item, person: null, urgency: "medium", approved: false };
       const obj = item as Partial<FollowUpItem> | null;
       return {
         text: String(obj?.text ?? ""),
         person: obj?.person ?? null,
-        timing: normalizeTiming(obj?.timing),
+        urgency: normalizeUrgency(obj?.urgency),
         approved: Boolean(obj?.approved),
       };
     })
@@ -248,7 +248,7 @@ export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail
 // --- follow-ups / action items overview -----------------------------------------
 // Flattens every reviewed meeting's APPROVED follow-ups/action items into
 // individual rows with their source meeting attached, so the dashboard can
-// group them by timing ("tomorrow" / "next_week" / etc.) without the caller
+// group them by urgency ("high" / "medium" / "low") without the caller
 // needing to know about the meeting_insights <-> meetings join. Unapproved
 // suggestions never appear here — only the meeting detail page's review UI
 // sees the full candidate set.

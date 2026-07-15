@@ -220,6 +220,23 @@ body {
   color: #e0b667;
 }
 
+/* --- urgency pills (added 2026-07-16, replaces the old timing captions) --
+   High/Medium/Low on Action Items/Follow-ups suggestions and the by-person
+   Follow-ups view, where urgency isn't otherwise conveyed by a section
+   label. */
+.bw-pill--urgency-high {
+  background: rgba(252, 129, 129, 0.18);
+  color: #fc8181;
+}
+.bw-pill--urgency-medium {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--bw-text-dim);
+}
+.bw-pill--urgency-low {
+  background: rgba(160, 174, 192, 0.15);
+  color: #a0aec0;
+}
+
 /* --- sidebar nav ----------------------------------------------------------- */
 .bw-nav-item {
   display: flex;
@@ -307,6 +324,25 @@ body {
   font-weight: 700;
   font-size: 0.85rem;
   margin: 2px 6px 8px;
+}
+
+/* --- person tags (added 2026-07-16) ---------------------------------------
+   Colored dot + name, used anywhere a participant/follow-up person shows up
+   (Follow-ups "with X" and by-person grouping, meeting cards, meeting
+   detail) so the same person reads consistently across the dashboard —
+   see personColor.ts for the color assignment. */
+.bw-person-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: #e7e8ec;
+}
+.bw-person-tag__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 /* --- chat bubbles (Ask page) ------------------------------------------------

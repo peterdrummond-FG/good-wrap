@@ -45,7 +45,12 @@
           <div class="text-caption text-grey-6 q-mb-md">
             {{ formatDate(meeting.startTime) }}
             <span v-if="meeting.durationMinutes"> · {{ meeting.durationMinutes }} min</span>
-            <span v-if="meeting.participants.length"> · {{ meeting.participants.join(", ") }}</span>
+            <span v-if="meeting.participants.length">
+              ·
+              <template v-for="(p, i) in meeting.participants" :key="p"
+                ><PersonTag :name="p" /><span v-if="i < meeting.participants.length - 1">, </span></template
+              >
+            </span>
             <span> · source: {{ meeting.source }}</span>
           </div>
 
@@ -140,14 +145,16 @@
 
                   <template v-if="showActionItemsChecklist">
                     <q-scroll-area style="height: 320px">
-                      <q-item v-for="(a, i) in reviewActionItems" :key="i" dense>
+                      <q-item v-for="(a, i) in sortedReviewActionItems" :key="i" dense>
                         <q-item-section avatar top>
                           <q-checkbox v-model="a.approved" dense />
                         </q-item-section>
                         <q-item-section>
                           {{ a.text }}
-                          <div v-if="a.timing !== 'unspecified'" class="text-caption text-grey-7">
-                            {{ timingLabel(a.timing) }}
+                          <div class="text-caption text-grey-7">
+                            <span class="bw-pill" :class="urgencyPillClass(a.urgency)">{{
+                              urgencyLabel(a.urgency)
+                            }}</span>
                           </div>
                         </q-item-section>
                       </q-item>
@@ -195,9 +202,9 @@
                       <ul class="bw-bullet-list">
                         <li v-for="(a, i) in approvedActionItems" :key="i">
                           {{ a.text }}
-                          <span v-if="a.timing !== 'unspecified'" class="text-caption text-grey-7">
-                            — {{ timingLabel(a.timing) }}</span
-                          >
+                          <span class="bw-pill" :class="urgencyPillClass(a.urgency)">{{
+                            urgencyLabel(a.urgency)
+                          }}</span>
                         </li>
                         <li v-if="!approvedActionItems.length" class="text-grey-6">(none approved)</li>
                       </ul>
@@ -220,16 +227,17 @@
 
                   <template v-if="showFollowUpsChecklist">
                     <q-scroll-area style="height: 320px">
-                      <q-item v-for="(f, i) in reviewFollowUps" :key="i" dense>
+                      <q-item v-for="(f, i) in sortedReviewFollowUps" :key="i" dense>
                         <q-item-section avatar top>
                           <q-checkbox v-model="f.approved" dense />
                         </q-item-section>
                         <q-item-section>
                           {{ f.text }}
-                          <div v-if="f.person || f.timing !== 'unspecified'" class="text-caption text-grey-7">
-                            <span v-if="f.person">with {{ f.person }}</span>
-                            <span v-if="f.person && f.timing !== 'unspecified'"> · </span>
-                            <span v-if="f.timing !== 'unspecified'">{{ timingLabel(f.timing) }}</span>
+                          <div class="text-caption text-grey-7 row items-center q-gutter-x-xs">
+                            <span v-if="f.person">with <PersonTag :name="f.person" /></span>
+                            <span class="bw-pill" :class="urgencyPillClass(f.urgency)">{{
+                              urgencyLabel(f.urgency)
+                            }}</span>
                           </div>
                         </q-item-section>
                       </q-item>
@@ -277,12 +285,10 @@
                       <ul class="bw-bullet-list">
                         <li v-for="(f, i) in approvedFollowUps" :key="i">
                           {{ f.text }}
-                          <span v-if="f.person || f.timing !== 'unspecified'" class="text-caption text-grey-7">
-                            —
-                            <span v-if="f.person">with {{ f.person }}</span>
-                            <span v-if="f.person && f.timing !== 'unspecified'"> · </span>
-                            <span v-if="f.timing !== 'unspecified'">{{ timingLabel(f.timing) }}</span>
-                          </span>
+                          <span v-if="f.person" class="text-caption text-grey-7">— with <PersonTag :name="f.person" /></span>
+                          <span class="bw-pill" :class="urgencyPillClass(f.urgency)">{{
+                            urgencyLabel(f.urgency)
+                          }}</span>
                         </li>
                         <li v-if="!approvedFollowUps.length" class="text-grey-6">(none approved)</li>
                       </ul>
@@ -400,11 +406,13 @@ import {
   submitMeetingReview,
   updateMeeting,
   updateMeetingInsights,
-  type FollowUpTiming,
   type MeetingDetail,
   type RegenerateCategory,
   type ReviewStatus,
+  type Urgency,
 } from "../api";
+import { sortByUrgency, urgencyLabel, urgencyPillClass } from "../urgency";
+import PersonTag from "../components/PersonTag.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -431,10 +439,17 @@ const newKeyword = ref("");
 // column for anything Claude missed. Takeaways aren't included here at all
 // (see the template's Takeaways column comment) — they're read directly
 // from meeting.insights.takeaways since there's nothing to review/toggle.
-const reviewActionItems = ref<{ text: string; timing: FollowUpTiming; approved: boolean }[]>([]);
-const reviewFollowUps = ref<{ text: string; person: string | null; timing: FollowUpTiming; approved: boolean }[]>(
+const reviewActionItems = ref<{ text: string; urgency: Urgency; approved: boolean }[]>([]);
+const reviewFollowUps = ref<{ text: string; person: string | null; urgency: Urgency; approved: boolean }[]>(
   []
 );
+
+// Suggestions are shown most-urgent-first (changed 2026-07-16, per Peter —
+// see urgency.ts). sortByUrgency returns a new array without touching item
+// identity, so the checkboxes here still bind to the same reactive objects
+// backing reviewActionItems/reviewFollowUps.
+const sortedReviewActionItems = computed(() => sortByUrgency(reviewActionItems.value));
+const sortedReviewFollowUps = computed(() => sortByUrgency(reviewFollowUps.value));
 const newActionItemText = ref("");
 const newFollowUpText = ref("");
 
@@ -466,12 +481,12 @@ const followUpsBaseline = ref("[]");
 
 function snapshotActionItems(): string {
   return JSON.stringify(
-    reviewActionItems.value.map((a) => ({ text: a.text, timing: a.timing, approved: a.approved }))
+    reviewActionItems.value.map((a) => ({ text: a.text, urgency: a.urgency, approved: a.approved }))
   );
 }
 function snapshotFollowUps(): string {
   return JSON.stringify(
-    reviewFollowUps.value.map((f) => ({ text: f.text, person: f.person, timing: f.timing, approved: f.approved }))
+    reviewFollowUps.value.map((f) => ({ text: f.text, person: f.person, urgency: f.urgency, approved: f.approved }))
   );
 }
 const actionItemsDirty = computed(() => snapshotActionItems() !== actionItemsBaseline.value);
@@ -488,22 +503,18 @@ const showActionItemsChecklist = computed(
 const showFollowUpsChecklist = computed(
   () => !meeting.value?.insights?.followUpsReviewedAt || editModeFollowUps.value
 );
-const approvedActionItems = computed(() => (meeting.value?.insights?.actionItems ?? []).filter((a) => a.approved));
-const approvedFollowUps = computed(() => (meeting.value?.insights?.followUps ?? []).filter((f) => f.approved));
+const approvedActionItems = computed(() =>
+  sortByUrgency((meeting.value?.insights?.actionItems ?? []).filter((a) => a.approved))
+);
+const approvedFollowUps = computed(() =>
+  sortByUrgency((meeting.value?.insights?.followUps ?? []).filter((f) => f.approved))
+);
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
   });
-}
-
-function timingLabel(timing: string): string {
-  return (
-    { today: "Today", tomorrow: "Tomorrow", this_week: "This week", next_week: "Next week" }[
-      timing
-    ] ?? ""
-  );
 }
 
 function reviewStatusLabel(status: ReviewStatus): string {
@@ -536,14 +547,14 @@ function addKeyword() {
 
 function addActionItem() {
   const value = newActionItemText.value.trim();
-  if (value) reviewActionItems.value.push(reactive({ text: value, timing: "unspecified", approved: true }));
+  if (value) reviewActionItems.value.push(reactive({ text: value, urgency: "medium", approved: true }));
   newActionItemText.value = "";
 }
 
 function addFollowUp() {
   const value = newFollowUpText.value.trim();
   if (value)
-    reviewFollowUps.value.push(reactive({ text: value, person: null, timing: "unspecified", approved: true }));
+    reviewFollowUps.value.push(reactive({ text: value, person: null, urgency: "medium", approved: true }));
   newFollowUpText.value = "";
 }
 

@@ -22,8 +22,8 @@ function formatEmailBody(payload: MeetingNotificationPayload): string {
     "Action items (you):",
     ...(payload.actionItems.length
       ? payload.actionItems.map((a) => {
-          const when = a.timing !== "unspecified" ? ` [${a.timing.replace("_", " ")}]` : "";
-          return `  - ${a.text}${when}`;
+          const urgency = a.urgency !== "medium" ? ` [${a.urgency}]` : "";
+          return `  - ${a.text}${urgency}`;
         })
       : ["  (none)"]),
     "",
@@ -31,8 +31,8 @@ function formatEmailBody(payload: MeetingNotificationPayload): string {
     ...(payload.followUps.length
       ? payload.followUps.map((f) => {
           const who = f.person ? ` (with ${f.person})` : "";
-          const when = f.timing !== "unspecified" ? ` [${f.timing.replace("_", " ")}]` : "";
-          return `  - ${f.text}${who}${when}`;
+          const urgency = f.urgency !== "medium" ? ` [${f.urgency}]` : "";
+          return `  - ${f.text}${who}${urgency}`;
         })
       : ["  (none)"]),
   ];

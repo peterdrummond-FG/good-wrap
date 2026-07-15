@@ -13,10 +13,11 @@ export interface ExtractInsightsInput {
   topic: string;
   participants: string;
   transcript: string;
-  // ISO timestamp of the meeting itself — the reference point Claude uses to
-  // turn relative language in the transcript ("let's sync again next week")
-  // into the timing buckets below. Without this, Claude has no basis for
-  // "tomorrow" vs "next week" since it has no notion of "today".
+  // ISO timestamp of the meeting itself — general grounding context so
+  // Claude knows when "today"/"this week" language in the transcript is
+  // relative to. (Used to also drive an explicit timing bucket per item;
+  // replaced by "urgency" 2026-07-16 per Peter's request, but still useful
+  // context for interpreting the transcript overall.)
   meetingDate: string;
   // Attendee names as recorded in the DB (see meeting_participants), so
   // Claude can attribute a follow-up to an actual participant rather than
@@ -47,8 +48,8 @@ export interface ExtractInsightsResult {
 interface RawExtractInsightsResult {
   keywords?: string[];
   takeaways?: string[];
-  actionItems?: { text: string; timing: FollowUpItem["timing"] }[];
-  followUps?: { text: string; person: string | null; timing: FollowUpItem["timing"] }[];
+  actionItems?: { text: string; urgency: FollowUpItem["urgency"] }[];
+  followUps?: { text: string; person: string | null; urgency: FollowUpItem["urgency"] }[];
 }
 
 const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
@@ -87,17 +88,19 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
                 "A task the meeting owner (not another attendee) appears to need to do themselves, " +
                 "grounded in the transcript.",
             },
-            timing: {
+            urgency: {
               type: "string",
-              enum: ["today", "tomorrow", "this_week", "next_week", "unspecified"],
+              enum: ["high", "medium", "low"],
               description:
-                "When this action item should happen, relative to the meeting date given below " +
-                "(\"today\" means the same day as the meeting itself). Use \"unspecified\" unless " +
-                "the transcript actually gives a timing signal. Don't guess a timing that wasn't " +
-                "at least implied.",
+                "How urgent this action item is, independent of when it might happen. Use " +
+                "\"high\" only for genuinely urgent/blocking/time-critical items (explicit " +
+                "language like \"urgent\", \"ASAP\", \"critical\", \"blocker\", or clear " +
+                "high-stakes framing). Use \"low\" for explicitly low-priority items (\"no " +
+                "rush\", \"whenever\", \"nice to have\"). Use \"medium\" as the default for " +
+                "everything else — don't force high or low without a real signal.",
             },
           },
-          required: ["text", "timing"],
+          required: ["text", "urgency"],
         },
         description:
           "Exactly 5-8 candidate action items for the meeting owner to review and pick from — " +
@@ -124,18 +127,19 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
                 "participant names — null if no specific person is identifiable, or if it's an " +
                 "unconfirmed item rather than someone else's task.",
             },
-            timing: {
+            urgency: {
               type: "string",
-              enum: ["today", "tomorrow", "this_week", "next_week", "unspecified"],
+              enum: ["high", "medium", "low"],
               description:
-                "When this follow-up should happen, relative to the meeting date given below. " +
-                "Use \"unspecified\" unless the transcript actually gives a timing signal " +
-                "(e.g. \"let's circle back before we wrap up today\" -> today; \"let's touch base " +
-                "tomorrow\" -> tomorrow; \"circle back next week\" -> next_week; \"sometime this " +
-                "week\" -> this_week). Don't guess a timing that wasn't at least implied.",
+                "How urgent this follow-up is, independent of when it might happen. Use " +
+                "\"high\" only for genuinely urgent/blocking/time-critical items (explicit " +
+                "language like \"urgent\", \"ASAP\", \"critical\", \"blocker\", or clear " +
+                "high-stakes framing). Use \"low\" for explicitly low-priority items (\"no " +
+                "rush\", \"whenever\", \"nice to have\"). Use \"medium\" as the default for " +
+                "everything else — don't force high or low without a real signal.",
             },
           },
-          required: ["text", "person", "timing"],
+          required: ["text", "person", "urgency"],
         },
         description:
           "Exactly 5-8 candidate follow-ups for a human to review and pick from — things other " +
@@ -153,8 +157,10 @@ const SYSTEM_PROMPT =
   "present in the text. Distinguish action items (things the meeting owner needs to do " +
   "themselves) from follow-ups (things other people need to do, or unconfirmed items worth a " +
   "reminder) — don't put the same task in both categories. For each action item or follow-up, " +
-  "only assign a timing (or, for follow-ups, a person) when the transcript actually supports it " +
-  "— leave it null/\"unspecified\" rather than guessing.\n\n" +
+  "assign urgency based on genuine signals in the transcript (explicit urgency language, or how " +
+  "the item was actually framed) — default to \"medium\" rather than forcing \"high\" or \"low\" " +
+  "without real support. For follow-ups, only assign a person when the transcript actually " +
+  "supports it — leave it null rather than guessing.\n\n" +
   "Two different standards apply here, and it matters which one you're using:\n" +
   "- Takeaways are FINAL — shown to the user directly with no further filtering. Pick exactly " +
   "the 5 that genuinely matter most; don't pad out to 5 with marginal ones if fewer than 5 " +

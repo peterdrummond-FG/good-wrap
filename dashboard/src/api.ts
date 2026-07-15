@@ -16,9 +16,11 @@ export interface MeetingListItem {
   topTakeaways: string[];
 }
 
-export type FollowUpTiming = "today" | "tomorrow" | "this_week" | "next_week" | "unspecified";
+// Replaced "timing" (today/tomorrow/this_week/next_week/unspecified) with
+// "urgency" 2026-07-16 — see db/schema.ts for the full rationale.
+export type Urgency = "high" | "medium" | "low";
 
-// Takeaways: plain suggest/approve, no owner or timing concept.
+// Takeaways: plain suggest/approve, no owner or urgency concept.
 export interface SuggestionItem {
   text: string;
   approved: boolean;
@@ -27,7 +29,7 @@ export interface SuggestionItem {
 // Action items: things Peter needs to do himself.
 export interface ActionItem {
   text: string;
-  timing: FollowUpTiming;
+  urgency: Urgency;
   approved: boolean;
 }
 
@@ -35,7 +37,7 @@ export interface ActionItem {
 export interface FollowUpItem {
   text: string;
   person: string | null;
-  timing: FollowUpTiming;
+  urgency: Urgency;
   approved: boolean;
 }
 
