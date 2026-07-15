@@ -11,7 +11,8 @@
     "notify": "tsx src/notify/cli.ts",
     "pipeline": "tsx src/pipeline/fullCli.ts",
     "ask": "tsx src/qa/cli.ts",
-    "api": "tsx watch src/server/index.ts"
+    "api": "tsx watch src/server/index.ts",
+    "start": "tsx src/server/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

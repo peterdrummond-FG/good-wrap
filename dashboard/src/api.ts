@@ -51,8 +51,15 @@ export interface AskResult {
   sources: { meetingId: string; topic: string; startTime: string }[];
 }
 
+// Base URL of the Stage 4 API. Empty string in local dev, where Vite's
+// proxy (vite.config.ts) forwards /api to the Fastify server on :4000.
+// In production, set VITE_API_BASE_URL (build-time env var) to wherever
+// the backend is actually hosted (e.g. a Railway domain) — this dashboard
+// and the API don't share an origin once they're on separate hosts.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${API_BASE_URL}/api${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
