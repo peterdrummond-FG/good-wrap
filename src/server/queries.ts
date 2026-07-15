@@ -33,13 +33,18 @@ function normalizeTiming(value: unknown): FollowUpTiming {
   return typeof value === "string" && VALID_TIMINGS.has(value) ? (value as FollowUpTiming) : "unspecified";
 }
 
+// Takeaways no longer go through a review step (changed 2026-07-16, per
+// Peter — see extractInsights.ts's ExtractInsightsResult comment), so this
+// always returns approved: true regardless of what's actually stored,
+// including for pre-2026-07-16 rows that predate the `approved` field
+// existing at all. There's nothing to "select" for this category anymore.
 export function normalizeTakeaways(raw: unknown): SuggestionItem[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item): SuggestionItem => {
-      if (typeof item === "string") return { text: item, approved: false };
+      if (typeof item === "string") return { text: item, approved: true };
       const obj = item as Partial<SuggestionItem> | null;
-      return { text: String(obj?.text ?? ""), approved: Boolean(obj?.approved) };
+      return { text: String(obj?.text ?? ""), approved: true };
     })
     .filter((t) => t.text.trim());
 }
@@ -162,9 +167,11 @@ export interface MeetingDetail {
   reviewStatus: ReviewStatus;
   insights: {
     keywords: string[];
-    // Full suggestion sets (approved AND unapproved) — the meeting detail
-    // page's review UI needs every candidate, not just the approved subset,
-    // so someone can change their mind on a previous review.
+    // takeaways: always all approved:true (no review step — see
+    // normalizeTakeaways). actionItems/followUps: full candidate sets
+    // (approved AND unapproved) — the meeting detail page's review UI needs
+    // every candidate, not just the approved subset, so someone can change
+    // their mind on a previous review.
     takeaways: SuggestionItem[];
     actionItems: ActionItem[];
     followUps: FollowUpItem[];

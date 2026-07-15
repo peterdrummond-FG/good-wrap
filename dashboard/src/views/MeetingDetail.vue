@@ -90,118 +90,207 @@
             </div>
 
             <div class="row q-col-gutter-md q-mb-sm">
-              <!-- Takeaways column -->
+              <!-- Takeaways column — no selection needed here (Peter's call:
+                   the 5 generated are good enough as-is), so this is a plain
+                   bulleted read-only list with no checkboxes and no
+                   add-your-own row, unlike the other two columns. The pencil
+                   just reveals a "Regenerate" button (nothing else to edit). -->
               <div class="col-12 col-md-4">
                 <div class="bw-review-col">
-                  <div class="bw-review-col__title">Takeaways</div>
+                  <div class="row items-center justify-between bw-review-col__title">
+                    <span>Takeaways</span>
+                    <q-btn
+                      flat round dense size="sm" icon="edit" color="grey-6"
+                      @click="editModeTakeaways = !editModeTakeaways"
+                    />
+                  </div>
                   <q-scroll-area style="height: 320px">
-                    <q-item v-for="(t, i) in reviewTakeaways" :key="i" dense>
-                      <q-item-section avatar top>
-                        <q-checkbox v-model="t.approved" dense />
-                      </q-item-section>
-                      <q-item-section>{{ t.text }}</q-item-section>
-                    </q-item>
-                    <q-item v-if="!reviewTakeaways.length" dense>
-                      <q-item-section class="text-grey-6">(none suggested)</q-item-section>
-                    </q-item>
+                    <ul class="bw-bullet-list">
+                      <li v-for="(t, i) in meeting.insights.takeaways" :key="i">{{ t.text }}</li>
+                      <li v-if="!meeting.insights.takeaways.length" class="text-grey-6">(none suggested)</li>
+                    </ul>
                   </q-scroll-area>
-                  <q-input
-                    v-model="newTakeawayText"
-                    placeholder="Add your own takeaway"
+                  <q-btn
+                    v-if="editModeTakeaways"
+                    flat
                     dense
-                    filled
-                    class="q-mt-sm"
-                    @keyup.enter="addTakeaway"
-                  >
-                    <template #append>
-                      <q-btn flat round dense icon="add" @click="addTakeaway" />
-                    </template>
-                  </q-input>
+                    no-caps
+                    icon="autorenew"
+                    label="Regenerate takeaways"
+                    class="q-mt-sm full-width"
+                    :loading="regeneratingCategory === 'takeaways'"
+                    @click="onRegenerate('takeaways')"
+                  />
                 </div>
               </div>
 
-              <!-- Action Items column -->
+              <!-- Action Items column — collapses to a plain bulleted list of
+                   approved items once the meeting's been reviewed; the pencil
+                   reopens the checkbox/add-your-own edit view (and reveals
+                   "Regenerate") so Peter can adjust or refresh it later. -->
               <div class="col-12 col-md-4">
                 <div class="bw-review-col">
-                  <div class="bw-review-col__title">Action Items <span class="text-grey-6">(you)</span></div>
-                  <q-scroll-area style="height: 320px">
-                    <q-item v-for="(a, i) in reviewActionItems" :key="i" dense>
-                      <q-item-section avatar top>
-                        <q-checkbox v-model="a.approved" dense />
-                      </q-item-section>
-                      <q-item-section>
-                        {{ a.text }}
-                        <div v-if="a.timing !== 'unspecified'" class="text-caption text-grey-7">
-                          {{ timingLabel(a.timing) }}
-                        </div>
-                      </q-item-section>
-                    </q-item>
-                    <q-item v-if="!reviewActionItems.length" dense>
-                      <q-item-section class="text-grey-6">(none suggested)</q-item-section>
-                    </q-item>
-                  </q-scroll-area>
-                  <q-input
-                    v-model="newActionItemText"
-                    placeholder="Add your own action item"
-                    dense
-                    filled
-                    class="q-mt-sm"
-                    @keyup.enter="addActionItem"
-                  >
-                    <template #append>
-                      <q-btn flat round dense icon="add" @click="addActionItem" />
-                    </template>
-                  </q-input>
+                  <div class="row items-center justify-between bw-review-col__title">
+                    <span>Action Items <span class="text-grey-6">(you)</span></span>
+                    <q-btn
+                      flat round dense size="sm" icon="edit" color="grey-6"
+                      @click="editModeActionItems = !editModeActionItems"
+                    />
+                  </div>
+
+                  <template v-if="showActionItemsChecklist">
+                    <q-scroll-area style="height: 320px">
+                      <q-item v-for="(a, i) in reviewActionItems" :key="i" dense>
+                        <q-item-section avatar top>
+                          <q-checkbox v-model="a.approved" dense />
+                        </q-item-section>
+                        <q-item-section>
+                          {{ a.text }}
+                          <div v-if="a.timing !== 'unspecified'" class="text-caption text-grey-7">
+                            {{ timingLabel(a.timing) }}
+                          </div>
+                        </q-item-section>
+                      </q-item>
+                      <q-item v-if="!reviewActionItems.length" dense>
+                        <q-item-section class="text-grey-6">(none suggested)</q-item-section>
+                      </q-item>
+                    </q-scroll-area>
+                    <q-input
+                      v-model="newActionItemText"
+                      placeholder="Add your own action item"
+                      dense
+                      filled
+                      class="q-mt-sm"
+                      @keyup.enter="addActionItem"
+                    >
+                      <template #append>
+                        <q-btn flat round dense icon="add" @click="addActionItem" />
+                      </template>
+                    </q-input>
+                    <q-btn
+                      color="primary"
+                      label="Save"
+                      unelevated
+                      no-caps
+                      dense
+                      class="q-mt-sm full-width"
+                      :disable="!actionItemsDirty"
+                      :loading="savingActionItems"
+                      @click="onSaveActionItems"
+                    />
+                    <q-btn
+                      v-if="editModeActionItems"
+                      flat
+                      dense
+                      no-caps
+                      icon="autorenew"
+                      label="Regenerate action items"
+                      class="q-mt-sm full-width"
+                      :loading="regeneratingCategory === 'actionItems'"
+                      @click="onRegenerate('actionItems')"
+                    />
+                  </template>
+                  <template v-else>
+                    <q-scroll-area style="height: 320px">
+                      <ul class="bw-bullet-list">
+                        <li v-for="(a, i) in approvedActionItems" :key="i">
+                          {{ a.text }}
+                          <span v-if="a.timing !== 'unspecified'" class="text-caption text-grey-7">
+                            — {{ timingLabel(a.timing) }}</span
+                          >
+                        </li>
+                        <li v-if="!approvedActionItems.length" class="text-grey-6">(none approved)</li>
+                      </ul>
+                    </q-scroll-area>
+                  </template>
                 </div>
               </div>
 
-              <!-- Follow-ups column -->
+              <!-- Follow-ups column — same collapse-to-bulleted behavior as
+                   Action Items above. -->
               <div class="col-12 col-md-4">
                 <div class="bw-review-col">
-                  <div class="bw-review-col__title">Follow-ups <span class="text-grey-6">(others)</span></div>
-                  <q-scroll-area style="height: 320px">
-                    <q-item v-for="(f, i) in reviewFollowUps" :key="i" dense>
-                      <q-item-section avatar top>
-                        <q-checkbox v-model="f.approved" dense />
-                      </q-item-section>
-                      <q-item-section>
-                        {{ f.text }}
-                        <div v-if="f.person || f.timing !== 'unspecified'" class="text-caption text-grey-7">
-                          <span v-if="f.person">with {{ f.person }}</span>
-                          <span v-if="f.person && f.timing !== 'unspecified'"> · </span>
-                          <span v-if="f.timing !== 'unspecified'">{{ timingLabel(f.timing) }}</span>
-                        </div>
-                      </q-item-section>
-                    </q-item>
-                    <q-item v-if="!reviewFollowUps.length" dense>
-                      <q-item-section class="text-grey-6">(none suggested)</q-item-section>
-                    </q-item>
-                  </q-scroll-area>
-                  <q-input
-                    v-model="newFollowUpText"
-                    placeholder="Add your own follow-up"
-                    dense
-                    filled
-                    class="q-mt-sm"
-                    @keyup.enter="addFollowUp"
-                  >
-                    <template #append>
-                      <q-btn flat round dense icon="add" @click="addFollowUp" />
-                    </template>
-                  </q-input>
+                  <div class="row items-center justify-between bw-review-col__title">
+                    <span>Follow-ups <span class="text-grey-6">(others)</span></span>
+                    <q-btn
+                      flat round dense size="sm" icon="edit" color="grey-6"
+                      @click="editModeFollowUps = !editModeFollowUps"
+                    />
+                  </div>
+
+                  <template v-if="showFollowUpsChecklist">
+                    <q-scroll-area style="height: 320px">
+                      <q-item v-for="(f, i) in reviewFollowUps" :key="i" dense>
+                        <q-item-section avatar top>
+                          <q-checkbox v-model="f.approved" dense />
+                        </q-item-section>
+                        <q-item-section>
+                          {{ f.text }}
+                          <div v-if="f.person || f.timing !== 'unspecified'" class="text-caption text-grey-7">
+                            <span v-if="f.person">with {{ f.person }}</span>
+                            <span v-if="f.person && f.timing !== 'unspecified'"> · </span>
+                            <span v-if="f.timing !== 'unspecified'">{{ timingLabel(f.timing) }}</span>
+                          </div>
+                        </q-item-section>
+                      </q-item>
+                      <q-item v-if="!reviewFollowUps.length" dense>
+                        <q-item-section class="text-grey-6">(none suggested)</q-item-section>
+                      </q-item>
+                    </q-scroll-area>
+                    <q-input
+                      v-model="newFollowUpText"
+                      placeholder="Add your own follow-up"
+                      dense
+                      filled
+                      class="q-mt-sm"
+                      @keyup.enter="addFollowUp"
+                    >
+                      <template #append>
+                        <q-btn flat round dense icon="add" @click="addFollowUp" />
+                      </template>
+                    </q-input>
+                    <q-btn
+                      color="primary"
+                      label="Save"
+                      unelevated
+                      no-caps
+                      dense
+                      class="q-mt-sm full-width"
+                      :disable="!followUpsDirty"
+                      :loading="savingFollowUps"
+                      @click="onSaveFollowUps"
+                    />
+                    <q-btn
+                      v-if="editModeFollowUps"
+                      flat
+                      dense
+                      no-caps
+                      icon="autorenew"
+                      label="Regenerate follow-ups"
+                      class="q-mt-sm full-width"
+                      :loading="regeneratingCategory === 'followUps'"
+                      @click="onRegenerate('followUps')"
+                    />
+                  </template>
+                  <template v-else>
+                    <q-scroll-area style="height: 320px">
+                      <ul class="bw-bullet-list">
+                        <li v-for="(f, i) in approvedFollowUps" :key="i">
+                          {{ f.text }}
+                          <span v-if="f.person || f.timing !== 'unspecified'" class="text-caption text-grey-7">
+                            —
+                            <span v-if="f.person">with {{ f.person }}</span>
+                            <span v-if="f.person && f.timing !== 'unspecified'"> · </span>
+                            <span v-if="f.timing !== 'unspecified'">{{ timingLabel(f.timing) }}</span>
+                          </span>
+                        </li>
+                        <li v-if="!approvedFollowUps.length" class="text-grey-6">(none approved)</li>
+                      </ul>
+                    </q-scroll-area>
+                  </template>
                 </div>
               </div>
             </div>
-
-            <q-btn
-              color="primary"
-              label="Save selections"
-              unelevated
-              no-caps
-              :loading="savingReview"
-              class="q-mb-md"
-              @click="onSaveReview"
-            />
           </template>
 
           <q-expansion-item label="Full transcript" class="q-mt-md" dense-toggle>
@@ -300,18 +389,20 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Dialog, Notify } from "quasar";
 import {
   deleteMeeting,
   fetchMeetingDetail,
   processMeeting,
+  regenerateInsightCategory,
   submitMeetingReview,
   updateMeeting,
   updateMeetingInsights,
   type FollowUpTiming,
   type MeetingDetail,
+  type RegenerateCategory,
   type ReviewStatus,
 } from "../api";
 
@@ -323,7 +414,6 @@ const loading = ref(true);
 const processing = ref(false);
 const deleting = ref(false);
 const saving = ref(false);
-const savingReview = ref(false);
 const error = ref("");
 
 // --- metadata edit (topic/date/duration/participants/keywords) ------------
@@ -338,15 +428,63 @@ const newKeyword = ref("");
 // --- always-visible suggestion review (independent of metadata edit mode) -
 // Peter's call: checkbox-only against the AI's suggested wording (no inline
 // text editing there) plus a single free-text "add your own" row per
-// column for anything Claude missed.
-const reviewTakeaways = ref<{ text: string; approved: boolean }[]>([]);
+// column for anything Claude missed. Takeaways aren't included here at all
+// (see the template's Takeaways column comment) — they're read directly
+// from meeting.insights.takeaways since there's nothing to review/toggle.
 const reviewActionItems = ref<{ text: string; timing: FollowUpTiming; approved: boolean }[]>([]);
 const reviewFollowUps = ref<{ text: string; person: string | null; timing: FollowUpTiming; approved: boolean }[]>(
   []
 );
-const newTakeawayText = ref("");
 const newActionItemText = ref("");
 const newFollowUpText = ref("");
+
+// --- pencil-triggered edit/regenerate state (added 2026-07-16) ------------
+// Once a meeting is reviewed, Action Items/Follow-ups collapse to a plain
+// bulleted list of approved items (see showActionItemsChecklist/
+// showFollowUpsChecklist below) — the pencil on each column re-opens the
+// checkbox/add-your-own view. Takeaways have no such collapse (always
+// bulleted); their pencil only reveals the "Regenerate" button.
+const editModeTakeaways = ref(false);
+const editModeActionItems = ref(false);
+const editModeFollowUps = ref(false);
+const regeneratingCategory = ref<RegenerateCategory | null>(null);
+
+// --- per-panel save + dirty-tracking (added 2026-07-16) -------------------
+// Each of Action Items/Follow-ups now saves independently instead of sharing
+// one meeting-wide "Save selections" button. A baseline snapshot is taken
+// whenever that panel's working copy is (re)seeded from the server — on
+// initial load, after that panel's own save, and after that panel's own
+// regenerate. The Save button stays disabled until the working copy differs
+// from its baseline (a checkbox toggle or an added item), and enables again
+// the instant it does. Saving/regenerating one panel deliberately only
+// touches that panel's own copy+baseline, so an in-progress edit in the
+// OTHER panel isn't silently discarded.
+const savingActionItems = ref(false);
+const savingFollowUps = ref(false);
+const actionItemsBaseline = ref("[]");
+const followUpsBaseline = ref("[]");
+
+function snapshotActionItems(): string {
+  return JSON.stringify(
+    reviewActionItems.value.map((a) => ({ text: a.text, timing: a.timing, approved: a.approved }))
+  );
+}
+function snapshotFollowUps(): string {
+  return JSON.stringify(
+    reviewFollowUps.value.map((f) => ({ text: f.text, person: f.person, timing: f.timing, approved: f.approved }))
+  );
+}
+const actionItemsDirty = computed(() => snapshotActionItems() !== actionItemsBaseline.value);
+const followUpsDirty = computed(() => snapshotFollowUps() !== followUpsBaseline.value);
+
+const showActionItemsChecklist = computed(
+  () => meeting.value?.reviewStatus !== "reviewed" || editModeActionItems.value
+);
+const showFollowUpsChecklist = computed(
+  () => meeting.value?.reviewStatus !== "reviewed" || editModeFollowUps.value
+);
+const approvedActionItems = computed(() => (meeting.value?.insights?.actionItems ?? []).filter((a) => a.approved));
+const approvedFollowUps = computed(() => (meeting.value?.insights?.followUps ?? []).filter((f) => f.approved));
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -387,12 +525,6 @@ function addKeyword() {
   newKeyword.value = "";
 }
 
-function addTakeaway() {
-  const value = newTakeawayText.value.trim();
-  if (value) reviewTakeaways.value.push(reactive({ text: value, approved: true }));
-  newTakeawayText.value = "";
-}
-
 function addActionItem() {
   const value = newActionItemText.value.trim();
   if (value) reviewActionItems.value.push(reactive({ text: value, timing: "unspecified", approved: true }));
@@ -406,13 +538,25 @@ function addFollowUp() {
   newFollowUpText.value = "";
 }
 
-// Re-seeds the always-visible review columns from the latest fetched
-// meeting — called after every load() so toggles never operate on stale data.
+// Re-seeds ONE panel's working copy (+ its dirty-tracking baseline) from the
+// latest fetched meeting. Kept separate per panel so saving/regenerating
+// Action Items, say, never clobbers an in-progress unsaved edit sitting in
+// the Follow-ups working copy.
+function resetActionItemsCopy() {
+  reviewActionItems.value = (meeting.value?.insights?.actionItems ?? []).map((a) => reactive({ ...a }));
+  actionItemsBaseline.value = snapshotActionItems();
+}
+function resetFollowUpsCopy() {
+  reviewFollowUps.value = (meeting.value?.insights?.followUps ?? []).map((f) => reactive({ ...f }));
+  followUpsBaseline.value = snapshotFollowUps();
+}
+
+// Re-seeds BOTH review columns — only appropriate on initial load or a full
+// reprocess, where discarding any in-progress edits is correct (a reprocess
+// regenerates every category and resets reviewStatus anyway).
 function initReviewCopies() {
-  const insights = meeting.value?.insights;
-  reviewTakeaways.value = (insights?.takeaways ?? []).map((t) => reactive({ ...t }));
-  reviewActionItems.value = (insights?.actionItems ?? []).map((a) => reactive({ ...a }));
-  reviewFollowUps.value = (insights?.followUps ?? []).map((f) => reactive({ ...f }));
+  resetActionItemsCopy();
+  resetFollowUpsCopy();
 }
 
 async function load() {
@@ -441,25 +585,73 @@ async function onProcess() {
   }
 }
 
-async function onSaveReview() {
-  savingReview.value = true;
+// Saves ONLY this panel's category — the other category is omitted from the
+// request entirely (see ReviewMeetingInput/SubmitReviewInput), so an
+// in-progress unsaved edit sitting in the other panel is left alone rather
+// than being silently persisted or discarded.
+async function onSaveActionItems() {
+  savingActionItems.value = true;
   error.value = "";
   try {
-    const result = await submitMeetingReview(props.id, {
-      takeaways: reviewTakeaways.value,
-      actionItems: reviewActionItems.value,
-      followUps: reviewFollowUps.value,
-    });
-    await load();
+    const result = await submitMeetingReview(props.id, { actionItems: reviewActionItems.value });
+    meeting.value = result.meeting;
+    resetActionItemsCopy();
+    // Collapse back to the bulleted view now that there's a fresh save.
+    editModeActionItems.value = false;
     Notify.create({
       type: "positive",
-      message: result.justReviewed ? "Reviewed — notifications sent" : "Selections saved",
+      message: result.justReviewed ? "Reviewed — notifications sent" : "Action items saved",
       timeout: 3000,
     });
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
-    savingReview.value = false;
+    savingActionItems.value = false;
+  }
+}
+
+async function onSaveFollowUps() {
+  savingFollowUps.value = true;
+  error.value = "";
+  try {
+    const result = await submitMeetingReview(props.id, { followUps: reviewFollowUps.value });
+    meeting.value = result.meeting;
+    resetFollowUpsCopy();
+    editModeFollowUps.value = false;
+    Notify.create({
+      type: "positive",
+      message: result.justReviewed ? "Reviewed — notifications sent" : "Follow-ups saved",
+      timeout: 3000,
+    });
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    savingFollowUps.value = false;
+  }
+}
+
+async function onRegenerate(category: RegenerateCategory) {
+  regeneratingCategory.value = category;
+  error.value = "";
+  try {
+    const result = await regenerateInsightCategory(props.id, category);
+    meeting.value = result.meeting;
+    // Only reset the copy for the category that was actually regenerated —
+    // resetting both here would blow away any in-progress unsaved edit the
+    // user has sitting in the OTHER panel.
+    if (category === "actionItems") resetActionItemsCopy();
+    else if (category === "followUps") resetFollowUpsCopy();
+    if (category === "takeaways") {
+      // Takeaways have no separate approve/save step — regenerating IS the
+      // save, so collapse the edit affordance back down automatically.
+      editModeTakeaways.value = false;
+    }
+    const label = { takeaways: "Takeaways", actionItems: "Action items", followUps: "Follow-ups" }[category];
+    Notify.create({ type: "positive", message: `${label} regenerated`, timeout: 3000 });
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    regeneratingCategory.value = null;
   }
 }
 

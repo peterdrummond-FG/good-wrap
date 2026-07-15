@@ -24,10 +24,17 @@ export interface ExtractInsightsInput {
   participantNames: string[];
 }
 
-// Takeaways/action items/follow-ups are all suggest-then-approve (2026-07-16)
-// — Claude proposes 5-8 candidates per category and Peter picks which to
-// keep on the meeting detail page, so every item comes back with
-// approved: false here; nothing is pre-approved by the model.
+// Action items/follow-ups are suggest-then-approve (2026-07-16) — Claude
+// proposes 5-8 candidates per category and Peter picks which to keep on the
+// meeting detail page, so those come back with approved: false; nothing is
+// pre-approved by the model there.
+//
+// Takeaways are NOT part of that workflow (changed 2026-07-16, per Peter:
+// "no need to select takeaways — what's being generated is good enough") —
+// exactly 5 are generated and all come back approved: true, no review step.
+// They keep the same {text, approved} shape as before purely so the rest of
+// the codebase (DB column, notification payload, etc.) doesn't need a
+// separate type — approved is just always true for this category now.
 export interface ExtractInsightsResult {
   keywords: string[];
   takeaways: SuggestionItem[];
@@ -62,12 +69,12 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
         type: "array",
         items: { type: "string" },
         description:
-          "Exactly 5-8 candidate takeaways for a human to review and pick from: decisions made " +
-          "or important context worth remembering. Each under ~25 words, grounded in what was " +
-          "actually said — no inferred motivation. If the meeting genuinely doesn't support 8 " +
-          "distinct points, it's fine for some to be more minor/marginal — the reviewer will " +
-          "discard the ones that aren't useful, so err on the side of including a plausible " +
-          "candidate rather than omitting it.",
+          "Exactly 5 takeaways: the decisions made or important context most worth remembering " +
+          "from this meeting. Each under ~25 words, grounded in what was actually said — no " +
+          "inferred motivation. Unlike action items and follow-ups below, these are shown " +
+          "directly with no human filtering step afterward, so pick the 5 that genuinely matter " +
+          "most rather than padding out to 5 with marginal ones — precision matters more here " +
+          "than for the other two categories.",
       },
       actionItems: {
         type: "array",
@@ -140,16 +147,21 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
 };
 
 const SYSTEM_PROMPT =
-  "You extract structured notes from meeting transcripts, as a set of CANDIDATES for a human " +
-  "reviewer to approve or discard — not a final, delivered summary. Ground every point in what " +
-  "was actually said in the transcript — don't infer motivation, diagnose, or invent details not " +
+  "You extract structured notes from a meeting transcript. Ground every point in what was " +
+  "actually said in the transcript — don't infer motivation, diagnose, or invent details not " +
   "present in the text. Distinguish action items (things the meeting owner needs to do " +
   "themselves) from follow-ups (things other people need to do, or unconfirmed items worth a " +
   "reminder) — don't put the same task in both categories. For each action item or follow-up, " +
   "only assign a timing (or, for follow-ups, a person) when the transcript actually supports it " +
-  "— leave it null/\"unspecified\" rather than guessing. Since a human will filter the candidates " +
-  "down to what's actually useful, always produce the requested 5-8 per category even if some " +
-  "entries end up more marginal than others — under-generating is worse than over-generating here.";
+  "— leave it null/\"unspecified\" rather than guessing.\n\n" +
+  "Two different standards apply here, and it matters which one you're using:\n" +
+  "- Takeaways are FINAL — shown to the user directly with no further filtering. Pick exactly " +
+  "the 5 that genuinely matter most; don't pad out to 5 with marginal ones if fewer than 5 " +
+  "clearly stand out.\n" +
+  "- Action items and follow-ups are CANDIDATES for a human reviewer to approve or discard. " +
+  "Since the reviewer filters these down afterward, always produce the requested 5-8 per " +
+  "category even if some entries end up more marginal than others — under-generating is worse " +
+  "than over-generating for these two categories specifically (not for takeaways).";
 
 let client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -198,7 +210,8 @@ export async function extractInsights(
 
       return {
         keywords: result.keywords ?? [],
-        takeaways: (result.takeaways ?? []).map((text) => ({ text, approved: false })),
+        // Takeaways: no review step — always approved (see the type comment above).
+        takeaways: (result.takeaways ?? []).map((text) => ({ text, approved: true })),
         actionItems: (result.actionItems ?? []).map((item) => ({ ...item, approved: false })),
         followUps: (result.followUps ?? []).map((item) => ({ ...item, approved: false })),
       };

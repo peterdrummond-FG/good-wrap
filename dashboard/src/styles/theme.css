@@ -234,6 +234,22 @@ body {
 .bw-takeaway-list li + li {
   margin-top: 2px;
 }
+
+/* Same idea as .bw-takeaway-list above, reused on the meeting detail page's
+   review columns (Takeaways always, Action Items/Follow-ups once collapsed
+   to their read-only approved view — added 2026-07-16). Kept as a separate
+   class rather than merging with .bw-takeaway-list so tweaking one doesn't
+   silently affect the Overview panel. */
+.bw-bullet-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #e7e8ec;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.bw-bullet-list li + li {
+  margin-top: 6px;
+}
 .bw-overview-item__empty {
   color: var(--bw-text-dim);
   font-size: 0.8rem;

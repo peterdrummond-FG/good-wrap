@@ -175,9 +175,12 @@ export function deleteMeeting(id: string): Promise<Record<string, never>> {
 
 export interface SubmitReviewInput {
   keywords?: string[];
-  takeaways: SuggestionItem[];
-  actionItems: ActionItem[];
-  followUps: FollowUpItem[];
+  /** Optional — takeaways aren't reviewed/edited here anymore; omit to leave unchanged. */
+  takeaways?: SuggestionItem[];
+  /** Optional — each review column now saves independently; omit the category you're not saving. */
+  actionItems?: ActionItem[];
+  /** Optional — each review column now saves independently; omit the category you're not saving. */
+  followUps?: FollowUpItem[];
 }
 
 export interface SubmitReviewResult {
@@ -193,6 +196,18 @@ export interface SubmitReviewResult {
 // normally without re-notifying.
 export function submitMeetingReview(id: string, input: SubmitReviewInput): Promise<SubmitReviewResult> {
   return request(`/meetings/${id}/review`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export type RegenerateCategory = "takeaways" | "actionItems" | "followUps";
+
+// Fetches a fresh Claude extraction and overwrites just ONE category —
+// doesn't touch reviewedAt or fire notifications. Triggered by the pencil
+// icon on a review column.
+export function regenerateInsightCategory(
+  id: string,
+  category: RegenerateCategory
+): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/regenerate`, { method: "POST", body: JSON.stringify({ category }) });
 }
 
 export function askQuestion(question: string): Promise<AskResult> {

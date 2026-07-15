@@ -1,8 +1,8 @@
 <template>
   <div class="bw-panel column">
     <div class="bw-panel__header">
-      <div class="bw-panel__title">Follow-ups</div>
-      <div class="bw-panel__subtitle">Approved follow-ups, and with who</div>
+      <div class="bw-panel__title">Action Items</div>
+      <div class="bw-panel__subtitle">Approved action items — things you need to do</div>
     </div>
 
     <q-banner v-if="error" class="bg-red-1 text-red-9 q-ma-sm" rounded dense>
@@ -14,21 +14,19 @@
         <template v-if="group.items.length">
           <div class="bw-section-label">{{ group.label }}</div>
           <router-link
-            v-for="(f, i) in group.items"
+            v-for="(a, i) in group.items"
             :key="i"
-            :to="`/meetings/${f.meetingId}`"
+            :to="`/meetings/${a.meetingId}`"
             class="bw-row"
           >
-            <div class="bw-row__title">{{ f.text }}</div>
-            <div class="bw-row__meta">
-              <span v-if="f.person">with {{ f.person }} · </span>{{ f.meetingTopic }}
-            </div>
+            <div class="bw-row__title">{{ a.text }}</div>
+            <div class="bw-row__meta">{{ a.meetingTopic }}</div>
           </router-link>
         </template>
       </template>
 
-      <div v-if="!followUps.length && !loading" class="text-grey-7 q-pa-md text-center">
-        Nothing approved yet — review a meeting's suggestions to see follow-ups here.
+      <div v-if="!actionItems.length && !loading" class="text-grey-7 q-pa-md text-center">
+        Nothing approved yet — review a meeting's suggestions to see action items here.
       </div>
     </div>
 
@@ -38,23 +36,23 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { fetchFollowUps, type FollowUpWithMeeting } from "../api";
+import { fetchFollowUps, type ActionItemWithMeeting } from "../api";
 
-const followUps = ref<FollowUpWithMeeting[]>([]);
+const actionItems = ref<ActionItemWithMeeting[]>([]);
 const loading = ref(true);
 const error = ref("");
 
 const groups = computed(() => {
   const buckets = {
-    tomorrow: [] as FollowUpWithMeeting[],
-    nextWeek: [] as FollowUpWithMeeting[],
-    other: [] as FollowUpWithMeeting[],
+    tomorrow: [] as ActionItemWithMeeting[],
+    nextWeek: [] as ActionItemWithMeeting[],
+    other: [] as ActionItemWithMeeting[],
   };
 
-  for (const f of followUps.value) {
-    if (f.timing === "tomorrow") buckets.tomorrow.push(f);
-    else if (f.timing === "next_week") buckets.nextWeek.push(f);
-    else buckets.other.push(f);
+  for (const a of actionItems.value) {
+    if (a.timing === "tomorrow") buckets.tomorrow.push(a);
+    else if (a.timing === "next_week") buckets.nextWeek.push(a);
+    else buckets.other.push(a);
   }
 
   return [
@@ -68,8 +66,10 @@ const groups = computed(() => {
 
 onMounted(async () => {
   try {
+    // Same endpoint as the Follow-ups panel (it returns both lists together)
+    // — just picks the other half of the response.
     const result = await fetchFollowUps();
-    followUps.value = result.followUps;
+    actionItems.value = result.actionItems;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {

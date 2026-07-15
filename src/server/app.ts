@@ -24,6 +24,7 @@ import {
 import { captureManualMeeting, type CaptureManualMeetingInput } from "../ingest/captureManualMeeting";
 import { runFullPipeline } from "../pipeline/runFullPipeline";
 import { submitMeetingReview, type ReviewMeetingInput } from "../pipeline/reviewMeeting";
+import { regenerateInsightCategory, type RegenerateCategory } from "../pipeline/regenerateCategory";
 import { askQuestion } from "../qa/askQuestion";
 
 export function buildApp() {
@@ -156,6 +157,32 @@ export function buildApp() {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
+
+  // Regenerates ONE category (takeaways/actionItems/followUps) via a fresh
+  // Claude call, triggered by the pencil icon on that category's review
+  // column. See regenerateCategory.ts — doesn't touch reviewedAt or fire
+  // notifications, and leaves the other two categories untouched.
+  app.post<{ Params: { id: string }; Body: { category?: RegenerateCategory } }>(
+    "/api/meetings/:id/regenerate",
+    async (req, reply) => {
+      const category = req.body?.category;
+      if (category !== "takeaways" && category !== "actionItems" && category !== "followUps") {
+        return reply
+          .code(400)
+          .send({ error: `category must be one of takeaways/actionItems/followUps, got: ${category}` });
+      }
+      try {
+        const meeting = await regenerateInsightCategory(req.params.id, category);
+        if (!meeting) {
+          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
+        }
+        return reply.send({ meeting });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
 
   app.post<{ Params: { id: string } }>("/api/meetings/:id/process", async (req, reply) => {
     try {
