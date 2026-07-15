@@ -24,6 +24,59 @@ export interface CaptureParticipantInput {
   name?: string;
 }
 
+// Shared by captureManualMeeting (new meeting) and updateMeeting (editing an
+// existing meeting's participant list, see queries.ts) so the email/name
+// matching rules only live in one place. `tx` accepts either a transaction or
+// the top-level `db` handle — same as everywhere else in this file.
+export async function resolveParticipantIds(
+  tx: Pick<typeof db, "select" | "insert">,
+  participants: CaptureParticipantInput[]
+): Promise<string[]> {
+  const participantIds: string[] = [];
+  for (const participant of participants) {
+    const email = participant.email?.trim().toLowerCase();
+    const name = participant.name?.trim();
+
+    if (!email && !name) continue;
+
+    if (email) {
+      const [person] = await tx
+        .insert(schema.people)
+        .values({ email, name })
+        .onConflictDoUpdate({
+          target: schema.people.email,
+          // Only overwrite `name` if a non-empty one was supplied this time,
+          // so a later transcript without names doesn't erase one we already have.
+          set: name ? { name } : {},
+        })
+        .returning({ id: schema.people.id });
+
+      participantIds.push(person.id);
+      continue;
+    }
+
+    // No email — match an existing name-only person, else create one.
+    const [existing] = await tx
+      .select({ id: schema.people.id })
+      .from(schema.people)
+      .where(and(isNull(schema.people.email), sql`lower(${schema.people.name}) = lower(${name})`))
+      .limit(1);
+
+    if (existing) {
+      participantIds.push(existing.id);
+      continue;
+    }
+
+    const [created] = await tx
+      .insert(schema.people)
+      .values({ name })
+      .returning({ id: schema.people.id });
+
+    participantIds.push(created.id);
+  }
+  return participantIds;
+}
+
 export interface CaptureManualMeetingInput {
   /** Meeting title/subject — maps to meetings.topic */
   topic: string;
@@ -97,50 +150,9 @@ export async function captureManualMeeting(
     // (email is null AND lower(name) matches), or create a new name-only row.
     // Real-world capture frequently only has names on hand — see the
     // `people_allow_name_only_identity` migration and the schema.ts comment.
-    const participantIds: string[] = [];
-    for (const participant of input.participants) {
-      const email = participant.email?.trim().toLowerCase();
-      const name = participant.name?.trim();
-
-      if (!email && !name) continue;
-
-      if (email) {
-        const [person] = await tx
-          .insert(schema.people)
-          .values({ email, name })
-          .onConflictDoUpdate({
-            target: schema.people.email,
-            // Only overwrite `name` if a non-empty one was supplied this time,
-            // so a later transcript without names doesn't erase one we already have.
-            set: name ? { name } : {},
-          })
-          .returning({ id: schema.people.id });
-
-        participantIds.push(person.id);
-        continue;
-      }
-
-      // No email — match an existing name-only person, else create one.
-      const [existing] = await tx
-        .select({ id: schema.people.id })
-        .from(schema.people)
-        .where(
-          and(isNull(schema.people.email), sql`lower(${schema.people.name}) = lower(${name})`)
-        )
-        .limit(1);
-
-      if (existing) {
-        participantIds.push(existing.id);
-        continue;
-      }
-
-      const [created] = await tx
-        .insert(schema.people)
-        .values({ name })
-        .returning({ id: schema.people.id });
-
-      participantIds.push(created.id);
-    }
+    // (Logic lives in resolveParticipantIds so updateMeeting() in queries.ts
+    // can reuse it when a meeting's participant list is edited later.)
+    const participantIds = await resolveParticipantIds(tx, input.participants);
 
     // 3. Create the meeting row.
     const [meeting] = await tx

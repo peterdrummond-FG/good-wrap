@@ -109,6 +109,37 @@ export function processMeeting(id: string) {
   return request(`/meetings/${id}/process`, { method: "POST" });
 }
 
+export interface UpdateMeetingInput {
+  /** Any field left undefined/omitted is unchanged. */
+  topic?: string;
+  startTime?: string;
+  durationMinutes?: number | null;
+  /** When provided, REPLACES the meeting's entire participant list. */
+  participants?: { name?: string; email?: string }[];
+}
+
+export function updateMeeting(id: string, input: UpdateMeetingInput): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export interface UpdateMeetingInsightsInput {
+  /** Any field left undefined/omitted is unchanged. */
+  keywords?: string[];
+  takeaways?: string[];
+  followUps?: FollowUpItem[];
+}
+
+export function updateMeetingInsights(
+  id: string,
+  input: UpdateMeetingInsightsInput
+): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/insights`, { method: "PATCH", body: JSON.stringify(input) });
+}
+
+export function deleteMeeting(id: string): Promise<Record<string, never>> {
+  return request(`/meetings/${id}`, { method: "DELETE" });
+}
+
 export function askQuestion(question: string): Promise<AskResult> {
   return request("/ask", { method: "POST", body: JSON.stringify({ question }) });
 }

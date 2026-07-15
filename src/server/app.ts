@@ -10,7 +10,16 @@
 
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { getMeetingDetail, listFollowUps, listMeetings } from "./queries";
+import {
+  deleteMeeting,
+  getMeetingDetail,
+  listFollowUps,
+  listMeetings,
+  updateMeeting,
+  updateMeetingInsights,
+  type UpdateMeetingInput,
+  type UpdateMeetingInsightsInput,
+} from "./queries";
 import { captureManualMeeting, type CaptureManualMeetingInput } from "../ingest/captureManualMeeting";
 import { runFullPipeline } from "../pipeline/runFullPipeline";
 import { askQuestion } from "../qa/askQuestion";
@@ -67,6 +76,53 @@ export function buildApp() {
         processed: false,
         processingError: err instanceof Error ? err.message : String(err),
       });
+    }
+  });
+
+  app.patch<{ Params: { id: string }; Body: UpdateMeetingInput }>(
+    "/api/meetings/:id",
+    async (req, reply) => {
+      try {
+        const found = await updateMeeting(req.params.id, req.body ?? {});
+        if (!found) {
+          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
+        }
+        const meeting = await getMeetingDetail(req.params.id);
+        return reply.send({ meeting });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.patch<{ Params: { id: string }; Body: UpdateMeetingInsightsInput }>(
+    "/api/meetings/:id/insights",
+    async (req, reply) => {
+      try {
+        const found = await updateMeetingInsights(req.params.id, req.body ?? {});
+        if (!found) {
+          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
+        }
+        const meeting = await getMeetingDetail(req.params.id);
+        return reply.send({ meeting });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.delete<{ Params: { id: string } }>("/api/meetings/:id", async (req, reply) => {
+    try {
+      const found = await deleteMeeting(req.params.id);
+      if (!found) {
+        return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
+      }
+      return reply.code(204).send();
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
