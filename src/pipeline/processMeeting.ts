@@ -24,7 +24,17 @@ export interface ProcessMeetingResult {
   chunkCount: number;
 }
 
-export async function processMeeting(meetingId: string): Promise<ProcessMeetingResult> {
+export interface ProcessMeetingOptions {
+  // Override for embedChunks' batch size — lower this for callers running
+  // under tight memory constraints (see runFullPipeline). Defaults to
+  // embedChunks' own default (32) when not set.
+  embedBatchSize?: number;
+}
+
+export async function processMeeting(
+  meetingId: string,
+  options: ProcessMeetingOptions = {}
+): Promise<ProcessMeetingResult> {
   const [meeting] = await db
     .select()
     .from(schema.meetings)
@@ -63,7 +73,7 @@ export async function processMeeting(meetingId: string): Promise<ProcessMeetingR
   });
 
   const chunks = chunkTranscript(transcript.rawText);
-  const embeddings = await embedChunks(chunks);
+  const embeddings = await embedChunks(chunks, options.embedBatchSize);
 
   return db.transaction(async (tx) => {
     // Idempotency: clear any prior run's output for this meeting first.

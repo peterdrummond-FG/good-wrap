@@ -25,12 +25,7 @@
 import { EmbeddingModel, FlagEmbedding } from "fastembed";
 import { withRetry } from "../util/retry";
 
-// Lowered from 32 (2026-07-15): Railway's plan caps this service at 1GB
-// memory with no headroom to raise it, and a batch of 32 chunks' worth of
-// simultaneous ONNX tensors was enough to OOM-kill the container during
-// /process on at least one meeting. Smaller batches trade a bit of speed
-// for materially lower peak memory per embedding call.
-const PASSAGE_BATCH_SIZE = 8;
+const PASSAGE_BATCH_SIZE = 32;
 
 let modelPromise: Promise<FlagEmbedding> | null = null;
 
@@ -53,8 +48,16 @@ function getModel(): Promise<FlagEmbedding> {
   return modelPromise;
 }
 
-/** Embed a batch of transcript chunks as passages (used by Stage 2). */
-export async function embedChunks(chunks: string[]): Promise<number[][]> {
+/**
+ * Embed a batch of transcript chunks as passages (used by Stage 2).
+ *
+ * `batchSize` defaults to 32 but can be overridden lower for callers that
+ * need to keep peak memory down — e.g. the manual "Reprocess" route runs on
+ * a memory-capped Railway plan and was getting OOM-killed at the default
+ * size (see runFullPipeline's `embedBatchSize` option). Normal
+ * capture-time auto-processing keeps the default.
+ */
+export async function embedChunks(chunks: string[], batchSize: number = PASSAGE_BATCH_SIZE): Promise<number[][]> {
   if (chunks.length === 0) return [];
 
   return withRetry(
@@ -62,7 +65,7 @@ export async function embedChunks(chunks: string[]): Promise<number[][]> {
       const model = await getModel();
       const embeddings: number[][] = [];
 
-      for await (const batch of model.passageEmbed(chunks, PASSAGE_BATCH_SIZE)) {
+      for await (const batch of model.passageEmbed(chunks, batchSize)) {
         embeddings.push(...batch);
       }
 

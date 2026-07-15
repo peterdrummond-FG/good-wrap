@@ -72,7 +72,13 @@ export function buildApp() {
 
   app.post<{ Params: { id: string } }>("/api/meetings/:id/process", async (req, reply) => {
     try {
-      const result = await runFullPipeline(req.params.id);
+      // Lower embedding batch size for this manual reprocess path only —
+      // this route is what the dashboard's "Reprocess meeting" button calls
+      // (capture-time auto-processing goes through a separate call site
+      // below, and keeps the default batch size). Needed because the
+      // backend runs on a memory-capped Railway plan that OOM-killed the
+      // container at the default batch size of 32 during a real reprocess.
+      const result = await runFullPipeline(req.params.id, { embedBatchSize: 8 });
       return reply.send(result);
     } catch (err) {
       req.log.error(err);

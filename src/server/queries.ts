@@ -156,7 +156,11 @@ export async function listFollowUps(): Promise<FollowUpWithMeeting[]> {
 
   const flattened: FollowUpWithMeeting[] = [];
   for (const row of rows) {
-    for (const item of row.followUps ?? []) {
+    // Defensive: follow_ups is expected to be an array, but a malformed row
+    // (e.g. stale test data written with the wrong shape) shouldn't crash
+    // this endpoint for every meeting — skip it instead.
+    const followUps = Array.isArray(row.followUps) ? row.followUps : [];
+    for (const item of followUps) {
       flattened.push({
         ...item,
         meetingId: row.meetingId,
