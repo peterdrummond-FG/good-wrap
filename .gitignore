@@ -4,3 +4,14 @@ dist/
 .env.local
 *.log
 .DS_Store
+local_cache/
+
+# Stray build/tool artifacts that have shown up alongside real source files
+# in dashboard/src (vue-tsc debug dumps, stale compiled JS, Vite temp files).
+# Never intentional — if one of these reappears, it's noise, not source.
+*.tsbuildinfo
+vite.config.ts.timestamp-*.mjs
+dashboard/src/**/*.vue.js
+dashboard/src/api.js
+dashboard/src/main.js
+dashboard/src/router/index.js

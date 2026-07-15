@@ -1,0 +1,251 @@
+/* Visual theme lifted from the BotBuzz AI-chat Figma reference Peter shared:
+ * near-black page background, dark-gray card/panel surfaces, a purple/indigo
+ * accent, pill-shaped active nav states, and a "Today / Yesterday / ..."
+ * grouped-list pattern (borrowed almost directly from its Chat History screen
+ * for our Meetings Overview / Follow-ups panels).
+ *
+ * Approach: override Quasar's own CSS custom properties (works with the
+ * precompiled quasar/src/css/index.sass we already import in main.ts — no
+ * need to touch the SCSS variable-file build path) plus a handful of custom
+ * utility classes for things Quasar doesn't have a variable for (panel
+ * surfaces, list rows, section dividers, chat bubbles).
+ */
+
+:root {
+  --q-primary: #7c6fee;
+  --q-dark-page: #17181c;
+  --q-dark: #1e1f24;
+
+  /* Not Quasar variables — our own tokens for the extra surface levels the
+     reference design uses (panel card bg sits above the page bg; row/bubble
+     bg sits above the panel bg). */
+  --bw-surface: #202127;
+  --bw-surface-raised: #2a2b31;
+  --bw-border: rgba(255, 255, 255, 0.08);
+  --bw-text-dim: #9195a0;
+}
+
+body {
+  background: var(--q-dark-page);
+}
+
+/* --- panel cards (Meetings / Meetings Overview / Follow-ups / Ask) -------- */
+.bw-panel {
+  background: var(--bw-surface);
+  border: 1px solid var(--bw-border);
+  border-radius: 16px;
+  height: 100%;
+}
+
+/* --- reorderable + width-resizable dashboard slots --------------------------
+   Panels are drag-reordered via a small grip icon tucked into the panel's own
+   top-left corner (no separate strip, no label — a 6-dot grip is a
+   self-explanatory convention). Width resizing happens via q-splitter's own
+   draggable gutters between panels (see Dashboard.vue) rather than a CSS
+   `resize` handle — height is fixed to the viewport and each panel scrolls
+   internally, per Peter's correction. Order persists to localStorage (see
+   Dashboard.vue) so it survives a reload — this is a real app running in the
+   user's own browser, not a sandboxed artifact, so localStorage is the right
+   tool here. */
+.bw-panel-slot {
+  position: relative;
+  height: 100%;
+  padding-right: 8px;
+}
+.bw-drag-handle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--bw-text-dim);
+  cursor: grab;
+  user-select: none;
+  z-index: 2;
+}
+.bw-drag-handle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.bw-drag-handle:active {
+  cursor: grabbing;
+}
+.bw-drag-handle--over {
+  outline: 2px dashed var(--q-primary);
+  outline-offset: 2px;
+}
+/* Room for the grip icon so it doesn't sit on top of the panel title. */
+.bw-panel-slot .bw-panel__header {
+  padding-left: 40px;
+}
+.q-splitter__separator {
+  background: var(--bw-border) !important;
+}
+.q-splitter__separator-area:hover .q-splitter__separator,
+.q-splitter__separator-area--active .q-splitter__separator {
+  background: var(--q-primary) !important;
+}
+
+.bw-panel__header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--bw-border);
+}
+
+.bw-panel__title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.bw-panel__subtitle {
+  font-size: 0.8rem;
+  color: var(--bw-text-dim);
+  margin-top: 2px;
+}
+
+.bw-panel__body {
+  padding: 12px;
+  overflow-y: auto;
+}
+
+/* --- section dividers: "Today" / "Yesterday" / ... with a rule either side,
+   directly modeled on the Chat History screen in the reference file ------- */
+.bw-section-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--bw-text-dim);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 14px 4px 6px;
+}
+.bw-section-label::before,
+.bw-section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--bw-border);
+}
+
+/* --- list rows (meetings, follow-ups) ------------------------------------ */
+.bw-row {
+  background: var(--bw-surface-raised);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  text-decoration: none;
+  display: block;
+  color: inherit;
+}
+.bw-row:hover {
+  background: #333540;
+}
+.bw-row__title {
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.bw-row__meta {
+  color: var(--bw-text-dim);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+/* --- pill badges / chips -------------------------------------------------- */
+.bw-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.bw-pill--processed {
+  background: rgba(124, 111, 238, 0.18);
+  color: #b3a9ff;
+}
+.bw-pill--pending {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--bw-text-dim);
+}
+
+/* --- sidebar nav ----------------------------------------------------------- */
+.bw-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  color: #c7c9d1;
+  font-weight: 600;
+  font-size: 0.88rem;
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+.bw-nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.bw-nav-item--active {
+  background: var(--q-primary);
+  color: #fff;
+}
+
+/* --- Meetings Overview: name-as-reminder + top takeaways ------------------ */
+.bw-overview-item {
+  background: var(--bw-surface-raised);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 6px;
+}
+.bw-overview-item__name {
+  display: inline-block;
+  color: var(--bw-text-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+.bw-overview-item__name:hover {
+  color: #b3a9ff;
+}
+.bw-takeaway-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #e7e8ec;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.bw-takeaway-list li + li {
+  margin-top: 2px;
+}
+.bw-overview-item__empty {
+  color: var(--bw-text-dim);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+/* --- chat bubbles (Ask page) ------------------------------------------------
+   q-chat-message's bg-color prop applies as a `text-{color}` class on the
+   bubble element (.q-message-text), not `bg-{color}` as Quasar's naming
+   convention would suggest elsewhere — confirmed by inspecting the rendered
+   DOM. Defining both here so the bubble works regardless of which prop
+   Quasar ends up using in a future version. */
+.bg-chat-user,
+.text-chat-user {
+  background: var(--bw-surface-raised) !important;
+  color: #fff !important;
+}
+.bg-chat-assistant,
+.text-chat-assistant {
+  background: var(--bw-surface) !important;
+  border: 1px solid var(--bw-border);
+  color: #e7e8ec !important;
+}

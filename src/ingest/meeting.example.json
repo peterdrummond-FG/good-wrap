@@ -1,0 +1,10 @@
+{
+  "topic": "Q3 Budget Review",
+  "startTime": "2026-07-14T15:00:00Z",
+  "durationMinutes": 45,
+  "participants": [
+    { "name": "Sarah Chen", "email": "sarah.chen@example.com" },
+    { "name": "Marcus Lee", "email": "marcus.lee@example.com" }
+  ],
+  "transcript": "Sarah: Let's start with the Q3 numbers...\nMarcus: Before that, can we revisit the marketing spend line?\n..."
+}

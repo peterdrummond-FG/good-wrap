@@ -45,9 +45,16 @@ import { relations } from "drizzle-orm";
 // --- custom pgvector column type -------------------------------------------------
 // Drizzle core doesn't ship a pgvector type, so it's defined here using customType.
 // Requires the `vector` extension enabled on the Postgres database (Neon supports this).
+//
+// Dimension is 384 to match the local embedding model used in
+// src/pipeline/embedChunks.ts (Xenova/all-MiniLM-L6-v2, run entirely in Node —
+// no external embeddings API/account). Originally drafted at 1536 assuming an
+// OpenAI/Voyage-style provider; changed 2026-07-15 per Peter's preference to
+// avoid adding another paid API dependency. If you ever swap the embedding
+// model, this number and the model's output dimension must match exactly.
 const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {
-    return "vector(1536)";
+    return "vector(384)";
   },
   toDriver(value: number[]): string {
     return `[${value.join(",")}]`;
@@ -85,11 +92,17 @@ export const users = pgTable("users", {
 
 // --- people --------------------------------------------------------------------
 // Normalized identity for anyone who appears as a meeting participant (not
-// necessarily a system user). Keyed on email so the same person is recognized
-// across meetings without manual dedup.
+// necessarily a system user). Keyed on email when known, but email is optional:
+// real-world capture (pasting a transcript) often doesn't have attendee emails
+// on hand, so a person can be identified by name alone. Updated 2026-07-14
+// (migration `people_allow_name_only_identity`) after live use showed requiring
+// email up front was blocking capture. Name-only rows are deduped via a partial
+// unique index on lower(name) where email is null — collisions across
+// different real people with the same name are possible and accepted as a
+// tradeoff at personal scale; email remains the stronger identity key when known.
 export const people = pgTable("people", {
   id: uuid("id").defaultRandom().primaryKey(),
-  email: text("email").notNull().unique(),
+  email: text("email").unique(),
   name: text("name"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -149,6 +162,24 @@ export const transcriptChunks = pgTable("transcript_chunks", {
 
 // --- meeting_insights -----------------------------------------------------------
 // Claude-generated keywords/takeaways/follow-ups (Stage 2 output).
+
+// Follow-ups are structured (not plain strings) so the dashboard can build a
+// "what to follow up on, with who, when" overview without re-parsing free text.
+// `person` and `timing` are Claude's best-effort inference from the transcript
+// (see extractInsights.ts) — `person` is null when no specific person is
+// identifiable, `timing` is "unspecified" when the transcript gives no signal
+// about when the follow-up should happen. Added 2026-07-15 for the follow-ups
+// overview feature; no DB migration needed since the column was already jsonb
+// and previously held plain strings — old rows are only replaced, never read,
+// by re-processing a meeting (see processMeeting.ts's idempotent delete+insert).
+export type FollowUpTiming = "tomorrow" | "this_week" | "next_week" | "unspecified";
+
+export interface FollowUpItem {
+  text: string;
+  person: string | null;
+  timing: FollowUpTiming;
+}
+
 export const meetingInsights = pgTable("meeting_insights", {
   id: uuid("id").defaultRandom().primaryKey(),
   meetingId: uuid("meeting_id")
@@ -156,7 +187,7 @@ export const meetingInsights = pgTable("meeting_insights", {
     .references(() => meetings.id, { onDelete: "cascade" }),
   keywords: jsonb("keywords").$type<string[]>(),
   takeaways: jsonb("takeaways").$type<string[]>(),
-  followUps: jsonb("follow_ups").$type<string[]>(),
+  followUps: jsonb("follow_ups").$type<FollowUpItem[]>(),
   generatedAt: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
