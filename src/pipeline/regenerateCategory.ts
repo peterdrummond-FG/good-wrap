@@ -1,15 +1,12 @@
 // Per-category regeneration (added 2026-07-16), triggered by the pencil icon
-// on each of the meeting detail page's three review columns. Re-runs the
-// same Claude extraction as Stage 2 (extractInsights) but only overwrites
-// ONE category in meeting_insights — the other two categories and keywords
-// are left exactly as they were.
+// on each of the meeting detail page's three review columns. Re-runs Stage
+// 2's Claude extraction but only overwrites ONE category in meeting_insights
+// — the others are left exactly as they were.
 //
-// Deliberately reuses the full extractInsights() call rather than building a
-// second, narrower tool schema for a single category: it's simpler and
-// lower-risk than maintaining two schemas in parallel, at the cost of
-// throwing away 2/3 of a ~1-cent Claude call each time this is used — a
-// trivial cost at personal scale. Worth revisiting if regenerate ends up
-// being used often enough for that to matter.
+// Calls the full extractInsights() (single combined Claude call — see that
+// file's header comment) and discards whichever categories it didn't ask
+// for. A trivial cost at personal scale; not worth a narrower per-category
+// call for what's just a "give me a fresh candidate set" action.
 //
 // This never fires notifications — regenerating is just "give me a fresh
 // candidate set to look at", not a review/approval action. For Action Items
@@ -74,21 +71,24 @@ export async function regenerateInsightCategory(
   });
 
   switch (category) {
-    case "takeaways":
+    case "takeaways": {
       await updateMeetingInsights(meetingId, { takeaways: fresh.takeaways });
       break;
-    case "actionItems":
+    }
+    case "actionItems": {
       await updateMeetingInsights(meetingId, {
         actionItems: fresh.actionItems,
         resetActionItemsReview: true,
       });
       break;
-    case "followUps":
+    }
+    case "followUps": {
       await updateMeetingInsights(meetingId, {
         followUps: fresh.followUps,
         resetFollowUpsReview: true,
       });
       break;
+    }
   }
 
   return getMeetingDetail(meetingId);
