@@ -13,6 +13,7 @@ import cors from "@fastify/cors";
 import {
   deleteMeeting,
   getMeetingDetail,
+  listActionItems,
   listFollowUps,
   listMeetings,
   updateMeeting,
@@ -22,6 +23,7 @@ import {
 } from "./queries";
 import { captureManualMeeting, type CaptureManualMeetingInput } from "../ingest/captureManualMeeting";
 import { runFullPipeline } from "../pipeline/runFullPipeline";
+import { submitMeetingReview, type ReviewMeetingInput } from "../pipeline/reviewMeeting";
 import { askQuestion } from "../qa/askQuestion";
 
 export function buildApp() {
@@ -35,8 +37,10 @@ export function buildApp() {
   });
 
   app.get("/api/followups", async (_req, reply) => {
-    const followUps = await listFollowUps();
-    return reply.send({ followUps });
+    // Both lists are approved-only (see queries.ts) — unapproved suggestions
+    // only ever surface on the meeting detail page's review UI.
+    const [followUps, actionItems] = await Promise.all([listFollowUps(), listActionItems()]);
+    return reply.send({ followUps, actionItems });
   });
 
   app.get<{ Params: { id: string } }>("/api/meetings/:id", async (req, reply) => {
@@ -96,16 +100,43 @@ export function buildApp() {
     }
   );
 
+  // Generic insights edit — no notification side effects, doesn't touch
+  // reviewedAt. Used for e.g. fixing a keyword typo. The meeting detail
+  // page's review flow (picking/approving suggestions) goes through
+  // POST /api/meetings/:id/review below instead, since that action needs to
+  // gate notifications.
   app.patch<{ Params: { id: string }; Body: UpdateMeetingInsightsInput }>(
     "/api/meetings/:id/insights",
     async (req, reply) => {
       try {
-        const found = await updateMeetingInsights(req.params.id, req.body ?? {});
+        const { found } = await updateMeetingInsights(req.params.id, req.body ?? {});
         if (!found) {
           return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
         }
         const meeting = await getMeetingDetail(req.params.id);
         return reply.send({ meeting });
+      } catch (err) {
+        req.log.error(err);
+        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  // Submit a review: persists which of the suggested takeaways/action
+  // items/follow-ups were approved (and any text edits), and — the first
+  // time this meeting's reviewedAt moves from null to set — fires the
+  // email/chat notifications with only the approved items. See
+  // src/pipeline/reviewMeeting.ts for the gating logic.
+  app.post<{ Params: { id: string }; Body: ReviewMeetingInput }>(
+    "/api/meetings/:id/review",
+    async (req, reply) => {
+      try {
+        const result = await submitMeetingReview(req.params.id, req.body);
+        if (!result) {
+          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
+        }
+        const meeting = await getMeetingDetail(req.params.id);
+        return reply.send({ ...result, meeting });
       } catch (err) {
         req.log.error(err);
         return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });

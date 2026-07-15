@@ -11,10 +11,12 @@ import type { MeetingNotificationPayload, Notifier } from "../notifier";
 
 function formatChatMessage(payload: MeetingNotificationPayload): string {
   const topTakeaway = payload.takeaways[0];
+  const topActionItem = payload.actionItems[0];
   const topFollowUp = payload.followUps[0];
 
-  const parts = [`✅ Processed: *${payload.topic}*`];
+  const parts = [`✅ Reviewed: *${payload.topic}*`];
   if (topTakeaway) parts.push(`Top takeaway: ${topTakeaway}`);
+  if (topActionItem) parts.push(`Action item: ${topActionItem.text}`);
   if (topFollowUp) {
     const who = topFollowUp.person ? ` (with ${topFollowUp.person})` : "";
     parts.push(`Follow-up: ${topFollowUp.text}${who}`);

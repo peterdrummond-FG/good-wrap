@@ -2,7 +2,7 @@
   <div class="bw-panel column">
     <div class="bw-panel__header">
       <div class="bw-panel__title">Follow-ups</div>
-      <div class="bw-panel__subtitle">What to follow up on, and with who</div>
+      <div class="bw-panel__subtitle">Approved action items and follow-ups, and with who</div>
     </div>
 
     <q-banner v-if="error" class="bg-red-1 text-red-9 q-ma-sm" rounded dense>
@@ -14,21 +14,26 @@
         <template v-if="group.items.length">
           <div class="bw-section-label">{{ group.label }}</div>
           <router-link
-            v-for="(f, i) in group.items"
+            v-for="(item, i) in group.items"
             :key="i"
-            :to="`/meetings/${f.meetingId}`"
+            :to="`/meetings/${item.meetingId}`"
             class="bw-row"
           >
-            <div class="bw-row__title">{{ f.text }}</div>
+            <div class="row items-center no-wrap q-gutter-xs">
+              <q-chip dense size="sm" :color="item.kind === 'action_item' ? 'primary' : undefined" text-color="white">
+                {{ item.kind === "action_item" ? "You" : "Other" }}
+              </q-chip>
+              <div class="bw-row__title">{{ item.text }}</div>
+            </div>
             <div class="bw-row__meta">
-              <span v-if="f.person">with {{ f.person }} · </span>{{ f.meetingTopic }}
+              <span v-if="item.person">with {{ item.person }} · </span>{{ item.meetingTopic }}
             </div>
           </router-link>
         </template>
       </template>
 
-      <div v-if="!followUps.length && !loading" class="text-grey-7 q-pa-md text-center">
-        No follow-ups yet — process a meeting to extract some.
+      <div v-if="!items.length && !loading" class="text-grey-7 q-pa-md text-center">
+        Nothing approved yet — review a meeting's suggestions to see action items and follow-ups here.
       </div>
     </div>
 
@@ -38,23 +43,31 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { fetchFollowUps, type FollowUpWithMeeting } from "../api";
+import { fetchFollowUps, type ActionItemWithMeeting, type FollowUpWithMeeting } from "../api";
 
-const followUps = ref<FollowUpWithMeeting[]>([]);
+// Action items and follow-ups are both "things to do", differing only in
+// ownership (see db/schema.ts's meeting_insights comment) — merged into one
+// panel with a small "You" / "Other" tag rather than two separate panels.
+interface UnifiedItem {
+  kind: "action_item" | "follow_up";
+  text: string;
+  person: string | null;
+  timing: string;
+  meetingId: string;
+  meetingTopic: string;
+}
+
+const items = ref<UnifiedItem[]>([]);
 const loading = ref(true);
 const error = ref("");
 
 const groups = computed(() => {
-  const buckets = {
-    tomorrow: [] as FollowUpWithMeeting[],
-    nextWeek: [] as FollowUpWithMeeting[],
-    other: [] as FollowUpWithMeeting[],
-  };
+  const buckets = { tomorrow: [] as UnifiedItem[], nextWeek: [] as UnifiedItem[], other: [] as UnifiedItem[] };
 
-  for (const f of followUps.value) {
-    if (f.timing === "tomorrow") buckets.tomorrow.push(f);
-    else if (f.timing === "next_week") buckets.nextWeek.push(f);
-    else buckets.other.push(f);
+  for (const item of items.value) {
+    if (item.timing === "tomorrow") buckets.tomorrow.push(item);
+    else if (item.timing === "next_week") buckets.nextWeek.push(item);
+    else buckets.other.push(item);
   }
 
   return [
@@ -66,10 +79,34 @@ const groups = computed(() => {
   ];
 });
 
+function toUnified(
+  actionItems: ActionItemWithMeeting[],
+  followUps: FollowUpWithMeeting[]
+): UnifiedItem[] {
+  return [
+    ...actionItems.map((a) => ({
+      kind: "action_item" as const,
+      text: a.text,
+      person: null,
+      timing: a.timing,
+      meetingId: a.meetingId,
+      meetingTopic: a.meetingTopic,
+    })),
+    ...followUps.map((f) => ({
+      kind: "follow_up" as const,
+      text: f.text,
+      person: f.person,
+      timing: f.timing,
+      meetingId: f.meetingId,
+      meetingTopic: f.meetingTopic,
+    })),
+  ];
+}
+
 onMounted(async () => {
   try {
     const result = await fetchFollowUps();
-    followUps.value = result.followUps;
+    items.value = toUnified(result.actionItems, result.followUps);
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {

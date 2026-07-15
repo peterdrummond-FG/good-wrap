@@ -161,23 +161,43 @@ export const transcriptChunks = pgTable("transcript_chunks", {
 });
 
 // --- meeting_insights -----------------------------------------------------------
-// Claude-generated keywords/takeaways/follow-ups (Stage 2 output).
-
-// Follow-ups are structured (not plain strings) so the dashboard can build a
-// "what to follow up on, with who, when" overview without re-parsing free text.
-// `person` and `timing` are Claude's best-effort inference from the transcript
-// (see extractInsights.ts) — `person` is null when no specific person is
-// identifiable, `timing` is "unspecified" when the transcript gives no signal
-// about when the follow-up should happen. Added 2026-07-15 for the follow-ups
-// overview feature; no DB migration needed since the column was already jsonb
-// and previously held plain strings — old rows are only replaced, never read,
-// by re-processing a meeting (see processMeeting.ts's idempotent delete+insert).
+// Claude-generated keywords/takeaways/action-items/follow-ups (Stage 2 output).
+//
+// Added 2026-07-16 (migration `add_action_items_and_review_status`): takeaways,
+// action_items, and follow_ups are now suggest-then-approve — Claude generates
+// 5-8 candidates per category (see extractInsights.ts) with `approved: false`,
+// and Peter picks which ones to keep (and can edit the text) on the meeting
+// detail page. `reviewedAt` is null until that review is saved at least once;
+// the dashboard's "needs review" badge and the notification gate (see
+// src/pipeline/reviewMeeting.ts) both key off this field. Keywords are NOT
+// part of this workflow — they stay fully automatic, no approval step.
+//
+// Distinction between action items and follow-ups (Peter's framing): action
+// items are tasks Peter himself needs to do (no separate owner field needed);
+// follow-ups are tasks other people need to do, or reminders of unconfirmed
+// items — hence follow-ups keep a `person` field and action items don't.
 export type FollowUpTiming = "tomorrow" | "this_week" | "next_week" | "unspecified";
 
+// Takeaways: plain suggest/approve, no owner or timing concept.
+export interface SuggestionItem {
+  text: string;
+  approved: boolean;
+}
+
+// Action items: things Peter needs to do himself.
+export interface ActionItem {
+  text: string;
+  timing: FollowUpTiming;
+  approved: boolean;
+}
+
+// Follow-ups: things waiting on someone else, or unconfirmed items to revisit.
+// `person` is null when no specific person is identifiable from the transcript.
 export interface FollowUpItem {
   text: string;
   person: string | null;
   timing: FollowUpTiming;
+  approved: boolean;
 }
 
 export const meetingInsights = pgTable("meeting_insights", {
@@ -186,8 +206,12 @@ export const meetingInsights = pgTable("meeting_insights", {
     .notNull()
     .references(() => meetings.id, { onDelete: "cascade" }),
   keywords: jsonb("keywords").$type<string[]>(),
-  takeaways: jsonb("takeaways").$type<string[]>(),
+  takeaways: jsonb("takeaways").$type<SuggestionItem[]>(),
+  actionItems: jsonb("action_items").$type<ActionItem[]>(),
   followUps: jsonb("follow_ups").$type<FollowUpItem[]>(),
+  // Null = suggestions generated but not yet reviewed/approved by Peter.
+  // Set = reviewed at least once (see reviewMeeting.ts for what flips this).
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
   generatedAt: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

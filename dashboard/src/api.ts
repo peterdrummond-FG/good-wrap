@@ -2,6 +2,8 @@
 // root). Types here are hand-kept in sync with src/server/queries.ts and
 // app.ts — this is a POC, not worth a shared-types package yet.
 
+export type ReviewStatus = "pending" | "needs_review" | "reviewed";
+
 export interface MeetingListItem {
   id: string;
   topic: string;
@@ -9,19 +11,41 @@ export interface MeetingListItem {
   durationMinutes: number | null;
   source: "manual" | "zoom";
   participants: string[];
-  processed: boolean;
+  reviewStatus: ReviewStatus;
+  /** Top 3 APPROVED takeaways — empty until reviewed. */
   topTakeaways: string[];
 }
 
 export type FollowUpTiming = "tomorrow" | "this_week" | "next_week" | "unspecified";
 
+// Takeaways: plain suggest/approve, no owner or timing concept.
+export interface SuggestionItem {
+  text: string;
+  approved: boolean;
+}
+
+// Action items: things Peter needs to do himself.
+export interface ActionItem {
+  text: string;
+  timing: FollowUpTiming;
+  approved: boolean;
+}
+
+// Follow-ups: things waiting on someone else, or unconfirmed items.
 export interface FollowUpItem {
   text: string;
   person: string | null;
   timing: FollowUpTiming;
+  approved: boolean;
 }
 
 export interface FollowUpWithMeeting extends FollowUpItem {
+  meetingId: string;
+  meetingTopic: string;
+  meetingStartTime: string;
+}
+
+export interface ActionItemWithMeeting extends ActionItem {
   meetingId: string;
   meetingTopic: string;
   meetingStartTime: string;
@@ -35,7 +59,16 @@ export interface MeetingDetail {
   source: "manual" | "zoom";
   participants: string[];
   transcript: string | null;
-  insights: { keywords: string[]; takeaways: string[]; followUps: FollowUpItem[] } | null;
+  reviewStatus: ReviewStatus;
+  insights: {
+    keywords: string[];
+    // Full candidate sets (approved AND unapproved) — the review UI needs
+    // every suggestion, not just what's currently approved.
+    takeaways: SuggestionItem[];
+    actionItems: ActionItem[];
+    followUps: FollowUpItem[];
+    reviewedAt: string | null;
+  } | null;
 }
 
 export interface CaptureMeetingInput {
@@ -96,7 +129,9 @@ export interface CaptureMeetingResult {
   participantIds: string[];
   // Capture always succeeds independently of processing — see app.ts's
   // POST /api/meetings. `processed` reflects whether the automatic Stage 2
-  // run right after capture actually completed.
+  // run right after capture actually completed (generated suggestions to
+  // review) — separate from reviewStatus, which tracks whether Peter has
+  // since approved any of them.
   processed: boolean;
   processingError?: string;
 }
@@ -123,10 +158,8 @@ export function updateMeeting(id: string, input: UpdateMeetingInput): Promise<{ 
 }
 
 export interface UpdateMeetingInsightsInput {
-  /** Any field left undefined/omitted is unchanged. */
+  /** Any field left undefined/omitted is unchanged. Doesn't affect reviewStatus. */
   keywords?: string[];
-  takeaways?: string[];
-  followUps?: FollowUpItem[];
 }
 
 export function updateMeetingInsights(
@@ -140,10 +173,35 @@ export function deleteMeeting(id: string): Promise<Record<string, never>> {
   return request(`/meetings/${id}`, { method: "DELETE" });
 }
 
+export interface SubmitReviewInput {
+  keywords?: string[];
+  takeaways: SuggestionItem[];
+  actionItems: ActionItem[];
+  followUps: FollowUpItem[];
+}
+
+export interface SubmitReviewResult {
+  meetingId: string;
+  /** True if this save is what moved the meeting from needs_review to reviewed. */
+  justReviewed: boolean;
+  meeting: MeetingDetail;
+}
+
+// Submits picks/edits from the review UI. The first time a meeting is
+// reviewed (reviewedAt null -> set), the backend fires email/chat
+// notifications with only the approved items — later re-saves persist
+// normally without re-notifying.
+export function submitMeetingReview(id: string, input: SubmitReviewInput): Promise<SubmitReviewResult> {
+  return request(`/meetings/${id}/review`, { method: "POST", body: JSON.stringify(input) });
+}
+
 export function askQuestion(question: string): Promise<AskResult> {
   return request("/ask", { method: "POST", body: JSON.stringify({ question }) });
 }
 
-export function fetchFollowUps(): Promise<{ followUps: FollowUpWithMeeting[] }> {
+export function fetchFollowUps(): Promise<{
+  followUps: FollowUpWithMeeting[];
+  actionItems: ActionItemWithMeeting[];
+}> {
   return request("/followups");
 }

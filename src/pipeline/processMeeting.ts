@@ -84,12 +84,17 @@ export async function processMeeting(
       .delete(schema.transcriptChunks)
       .where(eq(schema.transcriptChunks.transcriptId, transcript.id));
 
+    // reviewedAt is deliberately omitted (defaults to null) — a fresh or
+    // re-run process always produces new unreviewed suggestions, even if the
+    // prior run had already been reviewed. See reviewMeeting.ts for what
+    // flips it back to non-null.
     const [insightsRow] = await tx
       .insert(schema.meetingInsights)
       .values({
         meetingId,
         keywords: insights.keywords,
         takeaways: insights.takeaways,
+        actionItems: insights.actionItems,
         followUps: insights.followUps,
       })
       .returning({ id: schema.meetingInsights.id });

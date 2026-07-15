@@ -1,4 +1,8 @@
-// Full Stage 2 + Stage 3 CLI: process a captured meeting and fire notifications.
+// Stage 2 CLI: process a captured meeting (extract suggested takeaways,
+// action items, and follow-ups). Notifications no longer fire automatically
+// here — they wait until the meeting's suggestions are reviewed/approved on
+// the dashboard (see src/pipeline/reviewMeeting.ts), which is what now
+// triggers them.
 //
 // Usage:
 //   npm run pipeline -- <meetingId>
@@ -12,15 +16,12 @@ async function main() {
     throw new Error("Usage: npm run pipeline -- <meetingId>");
   }
 
-  const { processed, notified } = await runFullPipeline(meetingId);
+  const { processed } = await runFullPipeline(meetingId);
 
   console.log("Meeting processed:");
   console.log(`  insights_id: ${processed.insightsId}`);
   console.log(`  chunks:      ${processed.chunkCount}`);
-  console.log("Notifications sent:");
-  for (const r of notified.results) {
-    console.log(`  ${r.channel.padEnd(10)} ${r.status}`);
-  }
+  console.log("Suggestions generated — review and approve on the dashboard to trigger notifications.");
 }
 
 main()

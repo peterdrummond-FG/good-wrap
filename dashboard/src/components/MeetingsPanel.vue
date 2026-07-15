@@ -22,9 +22,7 @@
               <span v-if="m.participants.length"> · {{ m.participants.join(", ") }}</span>
             </div>
           </div>
-          <span class="bw-pill" :class="m.processed ? 'bw-pill--processed' : 'bw-pill--pending'">
-            {{ m.processed ? "Processed" : "Pending" }}
-          </span>
+          <span class="bw-pill" :class="pillClass(m.reviewStatus)">{{ pillLabel(m.reviewStatus) }}</span>
         </div>
       </router-link>
 
@@ -39,7 +37,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { fetchMeetings, type MeetingListItem } from "../api";
+import { fetchMeetings, type MeetingListItem, type ReviewStatus } from "../api";
 
 const meetings = ref<MeetingListItem[]>([]);
 const loading = ref(true);
@@ -47,6 +45,18 @@ const error = ref("");
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function pillLabel(status: ReviewStatus): string {
+  return { pending: "Pending", needs_review: "Needs review", reviewed: "Reviewed" }[status];
+}
+
+function pillClass(status: ReviewStatus): string {
+  return {
+    pending: "bw-pill--pending",
+    needs_review: "bw-pill--needs-review",
+    reviewed: "bw-pill--processed",
+  }[status];
 }
 
 onMounted(async () => {

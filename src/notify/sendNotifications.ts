@@ -11,6 +11,7 @@ import { dashboardFlagNotifier } from "./channels/dashboardFlag";
 import { emailNotifier } from "./channels/email";
 import { chatNotifier } from "./channels/chat";
 import type { MeetingNotificationPayload, Notifier, NotificationOutcome } from "./notifier";
+import { normalizeActionItems, normalizeFollowUps, normalizeTakeaways } from "../server/queries";
 
 const notifiers: Notifier[] = [emailNotifier, chatNotifier, dashboardFlagNotifier];
 
@@ -42,13 +43,21 @@ export async function sendNotifications(meetingId: string): Promise<SendNotifica
     );
   }
 
+  // Takeaways/action items/follow-ups are suggest-then-approve (see
+  // db/schema.ts) — only send what Peter actually approved during review,
+  // never the raw candidate set Claude proposed. Normalize first since a
+  // meeting reviewed via a direct DB write or an old pre-migration row could
+  // otherwise reach here in a shape these types don't expect.
   const payload: MeetingNotificationPayload = {
     meetingId,
     topic: meeting.topic,
     startTime: meeting.startTime,
     keywords: insights.keywords ?? [],
-    takeaways: insights.takeaways ?? [],
-    followUps: insights.followUps ?? [],
+    takeaways: normalizeTakeaways(insights.takeaways)
+      .filter((t) => t.approved)
+      .map((t) => t.text),
+    actionItems: normalizeActionItems(insights.actionItems).filter((a) => a.approved),
+    followUps: normalizeFollowUps(insights.followUps).filter((f) => f.approved),
   };
 
   const results: { channel: string; status: NotificationOutcome }[] = [];

@@ -19,6 +19,14 @@ function formatEmailBody(payload: MeetingNotificationPayload): string {
     "Takeaways:",
     ...(payload.takeaways.length ? payload.takeaways.map((t) => `  - ${t}`) : ["  (none)"]),
     "",
+    "Action items (you):",
+    ...(payload.actionItems.length
+      ? payload.actionItems.map((a) => {
+          const when = a.timing !== "unspecified" ? ` [${a.timing.replace("_", " ")}]` : "";
+          return `  - ${a.text}${when}`;
+        })
+      : ["  (none)"]),
+    "",
     "Follow-ups:",
     ...(payload.followUps.length
       ? payload.followUps.map((f) => {

@@ -20,7 +20,7 @@
             <ul v-if="m.topTakeaways.length" class="bw-takeaway-list">
               <li v-for="(t, i) in m.topTakeaways" :key="i">{{ t }}</li>
             </ul>
-            <div v-else class="bw-overview-item__empty">Not processed yet — no takeaways.</div>
+            <div v-else class="bw-overview-item__empty">{{ emptyLabel(m.reviewStatus) }}</div>
           </div>
         </template>
       </template>
@@ -36,8 +36,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { fetchMeetings, type MeetingListItem } from "../api";
+import { fetchMeetings, type MeetingListItem, type ReviewStatus } from "../api";
 import { bucketByRecency } from "../dateBuckets";
+
+function emptyLabel(status: ReviewStatus): string {
+  return {
+    pending: "Not processed yet — no takeaways.",
+    needs_review: "Ready for review — no takeaways approved yet.",
+    reviewed: "No takeaways approved.",
+  }[status];
+}
 
 const meetings = ref<MeetingListItem[]>([]);
 const loading = ref(true);

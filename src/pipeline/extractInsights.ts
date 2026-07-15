@@ -7,7 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { requireEnv } from "../util/env";
 import { withRetry } from "../util/retry";
-import type { FollowUpItem } from "../../db/schema";
+import type { ActionItem, FollowUpItem, SuggestionItem } from "../../db/schema";
 
 export interface ExtractInsightsInput {
   topic: string;
@@ -24,16 +24,31 @@ export interface ExtractInsightsInput {
   participantNames: string[];
 }
 
+// Takeaways/action items/follow-ups are all suggest-then-approve (2026-07-16)
+// — Claude proposes 5-8 candidates per category and Peter picks which to
+// keep on the meeting detail page, so every item comes back with
+// approved: false here; nothing is pre-approved by the model.
 export interface ExtractInsightsResult {
   keywords: string[];
-  takeaways: string[];
+  takeaways: SuggestionItem[];
+  actionItems: ActionItem[];
   followUps: FollowUpItem[];
+}
+
+// Raw shape Claude's tool call returns, before `approved: false` is stamped
+// onto every item by this module.
+interface RawExtractInsightsResult {
+  keywords?: string[];
+  takeaways?: string[];
+  actionItems?: { text: string; timing: FollowUpItem["timing"] }[];
+  followUps?: { text: string; person: string | null; timing: FollowUpItem["timing"] }[];
 }
 
 const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
   name: "record_meeting_insights",
   description:
-    "Record the extracted keywords, takeaways, and follow-ups for this meeting transcript.",
+    "Record the extracted keywords, takeaways, action items, and follow-ups for this meeting " +
+    "transcript.",
   input_schema: {
     type: "object",
     properties: {
@@ -47,8 +62,40 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
         type: "array",
         items: { type: "string" },
         description:
-          "3-8 concise takeaways: decisions made or important context worth remembering. " +
-          "Each under ~25 words, grounded in what was actually said — no inferred motivation.",
+          "Exactly 5-8 candidate takeaways for a human to review and pick from: decisions made " +
+          "or important context worth remembering. Each under ~25 words, grounded in what was " +
+          "actually said — no inferred motivation. If the meeting genuinely doesn't support 8 " +
+          "distinct points, it's fine for some to be more minor/marginal — the reviewer will " +
+          "discard the ones that aren't useful, so err on the side of including a plausible " +
+          "candidate rather than omitting it.",
+      },
+      actionItems: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            text: {
+              type: "string",
+              description:
+                "A task the meeting owner (not another attendee) appears to need to do themselves, " +
+                "grounded in the transcript.",
+            },
+            timing: {
+              type: "string",
+              enum: ["tomorrow", "this_week", "next_week", "unspecified"],
+              description:
+                "When this action item should happen, relative to the meeting date given below. " +
+                "Use \"unspecified\" unless the transcript actually gives a timing signal. Don't " +
+                "guess a timing that wasn't at least implied.",
+            },
+          },
+          required: ["text", "timing"],
+        },
+        description:
+          "Exactly 5-8 candidate action items for the meeting owner to review and pick from — " +
+          "things the owner themselves seems to need to do (as opposed to follow-ups, which are " +
+          "for other people or unconfirmed items). Same reviewer-will-filter guidance as takeaways: " +
+          "include plausible candidates even if some are minor.",
       },
       followUps: {
         type: "array",
@@ -57,14 +104,17 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
           properties: {
             text: {
               type: "string",
-              description: "The concrete action item or thing to follow up on, grounded in the transcript.",
+              description:
+                "A thing to follow up on that's either someone else's task, or an unconfirmed " +
+                "item worth double-checking later — grounded in the transcript.",
             },
             person: {
               type: ["string", "null"],
               description:
-                "Which attendee this follow-up should be discussed with next, if the transcript " +
-                "makes that clear. Must exactly match one of the provided participant names — " +
-                "null if no specific person is identifiable (e.g. it's a solo task or ambiguous).",
+                "Which attendee this follow-up is waiting on or should be discussed with next, if " +
+                "the transcript makes that clear. Must exactly match one of the provided " +
+                "participant names — null if no specific person is identifiable, or if it's an " +
+                "unconfirmed item rather than someone else's task.",
             },
             timing: {
               type: "string",
@@ -80,21 +130,26 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
           required: ["text", "person", "timing"],
         },
         description:
-          "0-8 concrete action items or things to follow up on next time, grounded in the " +
-          "transcript. Empty array if there genuinely aren't any.",
+          "Exactly 5-8 candidate follow-ups for a human to review and pick from — things other " +
+          "people need to do, or unconfirmed items worth a reminder. Same reviewer-will-filter " +
+          "guidance as takeaways/action items.",
       },
     },
-    required: ["keywords", "takeaways", "followUps"],
+    required: ["keywords", "takeaways", "actionItems", "followUps"],
   },
 };
 
 const SYSTEM_PROMPT =
-  "You extract structured notes from meeting transcripts. Ground every point in what was " +
-  "actually said in the transcript — don't infer motivation, diagnose, or invent details not " +
-  "present in the text. If the transcript is casual/exploratory rather than task-driven, it's " +
-  "fine for follow-ups to be a short or empty list rather than padded out. For each follow-up, " +
-  "only assign a person or timing when the transcript actually supports it — leave person null " +
-  "and timing \"unspecified\" rather than guessing.";
+  "You extract structured notes from meeting transcripts, as a set of CANDIDATES for a human " +
+  "reviewer to approve or discard — not a final, delivered summary. Ground every point in what " +
+  "was actually said in the transcript — don't infer motivation, diagnose, or invent details not " +
+  "present in the text. Distinguish action items (things the meeting owner needs to do " +
+  "themselves) from follow-ups (things other people need to do, or unconfirmed items worth a " +
+  "reminder) — don't put the same task in both categories. For each action item or follow-up, " +
+  "only assign a timing (or, for follow-ups, a person) when the transcript actually supports it " +
+  "— leave it null/\"unspecified\" rather than guessing. Since a human will filter the candidates " +
+  "down to what's actually useful, always produce the requested 5-8 per category even if some " +
+  "entries end up more marginal than others — under-generating is worse than over-generating here.";
 
 let client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -139,12 +194,13 @@ export async function extractInsights(
         throw new Error("Claude did not return a tool_use block for record_meeting_insights.");
       }
 
-      const result = toolUse.input as Partial<ExtractInsightsResult>;
+      const result = toolUse.input as RawExtractInsightsResult;
 
       return {
         keywords: result.keywords ?? [],
-        takeaways: result.takeaways ?? [],
-        followUps: result.followUps ?? [],
+        takeaways: (result.takeaways ?? []).map((text) => ({ text, approved: false })),
+        actionItems: (result.actionItems ?? []).map((item) => ({ ...item, approved: false })),
+        followUps: (result.followUps ?? []).map((item) => ({ ...item, approved: false })),
       };
     },
     {
