@@ -30,13 +30,26 @@ import { askQuestion } from "../qa/askQuestion";
 export function buildApp() {
   const app = Fastify({ logger: true });
 
-  // Locked to the Vite dev server origin (changed 2026-07-15, CODE-AUDIT.md
-  // item #8 — was origin: true, reflecting any request's Origin header,
-  // which combined with zero auth on every route below meant any website a
-  // browser visited could call this API). This is still a local-only POC,
-  // so localhost:5173 is the only origin that needs it; revisit this list
-  // once the dashboard/API are actually deployed somewhere reachable.
-  app.register(cors, { origin: ["http://localhost:5173"] });
+  // Locked to an explicit allow-list (changed 2026-07-15, CODE-AUDIT.md item
+  // #8 — was origin: true, reflecting any request's Origin header, which
+  // combined with zero auth on every route below meant any website a browser
+  // visited could call this API). Still no auth, so this list is the only
+  // thing standing between the API and the open internet — keep it to
+  // exactly the origins that legitimately call it.
+  //
+  // Extended 2026-07-16 for the Vercel/Railway deploy: the dashboard now
+  // also runs at good-wrap.vercel.app (Railway hosts the API itself, so it's
+  // never the *origin* of a browser request and doesn't need to be listed
+  // here). ALLOWED_ORIGINS is an optional comma-separated env var so a new
+  // Vercel preview-deployment URL can be added on Railway without a code
+  // change/redeploy; the defaults below cover local dev + the known
+  // production Vercel domain.
+  const defaultOrigins = ["http://localhost:5173", "https://good-wrap.vercel.app"];
+  const extraOrigins = (process.env.ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  app.register(cors, { origin: [...defaultOrigins, ...extraOrigins] });
 
   app.get("/api/meetings", async (_req, reply) => {
     const meetings = await listMeetings();

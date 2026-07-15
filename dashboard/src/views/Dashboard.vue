@@ -1,5 +1,19 @@
 <template>
-  <q-page class="q-pa-md" style="height: calc(100vh - 50px)">
+  <q-page class="q-pa-md bw-dashboard-page">
+    <!--
+      3 columns, left to right by default: Meetings | Meetings Overview |
+      Action Items (stacked on top of Follow-ups). Reduced from 4 flat
+      columns to 3 on 2026-07-16 per Peter's request — Action Items and
+      Follow-ups now share one resizable column via a horizontal (top/bottom)
+      q-splitter instead of each being its own top-level column.
+
+      Every splitter model is a percentage of its own container (Quasar's
+      default splitter unit), and every container is height/width: 100% down
+      to the q-page itself — so the whole layout scales with the viewport
+      instead of assuming a fixed pixel size anywhere. min-width/min-height:0
+      on each slot (see theme.css) keeps flex children from refusing to
+      shrink below their content size when the window gets narrow.
+    -->
     <q-splitter
       v-model="splitOuter"
       :limits="[15, 70]"
@@ -20,7 +34,8 @@
           >
             <q-icon name="drag_indicator" size="18px" />
           </div>
-          <component :is="panelComponents[panelOrder[0]]" />
+          <component :is="singleComponents[columnOrder[0]]" v-if="columnOrder[0] !== 'actionstack'" />
+          <ActionFollowUpStack v-else v-model="splitStack" @resized="saveSplits" />
         </div>
       </template>
 
@@ -45,53 +60,28 @@
               >
                 <q-icon name="drag_indicator" size="18px" />
               </div>
-              <component :is="panelComponents[panelOrder[1]]" />
+              <component :is="singleComponents[columnOrder[1]]" v-if="columnOrder[1] !== 'actionstack'" />
+              <ActionFollowUpStack v-else v-model="splitStack" @resized="saveSplits" />
             </div>
           </template>
 
           <template #after>
-            <q-splitter
-              v-model="splitInner2"
-              :limits="[20, 80]"
-              style="height: 100%"
-              @update:model-value="saveSplits"
-            >
-              <template #before>
-                <div class="bw-panel-slot">
-                  <div
-                    class="bw-drag-handle"
-                    :class="{ 'bw-drag-handle--over': dragOverIdx === 2 && dragIndex !== 2 }"
-                    draggable="true"
-                    @dragstart="onDragStart(2)"
-                    @dragend="onDragEnd"
-                    @dragover.prevent="dragOverIdx = 2"
-                    @dragleave="dragOverIdx = null"
-                    @drop="onDrop(2)"
-                  >
-                    <q-icon name="drag_indicator" size="18px" />
-                  </div>
-                  <component :is="panelComponents[panelOrder[2]]" />
-                </div>
-              </template>
-
-              <template #after>
-                <div class="bw-panel-slot">
-                  <div
-                    class="bw-drag-handle"
-                    :class="{ 'bw-drag-handle--over': dragOverIdx === 3 && dragIndex !== 3 }"
-                    draggable="true"
-                    @dragstart="onDragStart(3)"
-                    @dragend="onDragEnd"
-                    @dragover.prevent="dragOverIdx = 3"
-                    @dragleave="dragOverIdx = null"
-                    @drop="onDrop(3)"
-                  >
-                    <q-icon name="drag_indicator" size="18px" />
-                  </div>
-                  <component :is="panelComponents[panelOrder[3]]" />
-                </div>
-              </template>
-            </q-splitter>
+            <div class="bw-panel-slot">
+              <div
+                class="bw-drag-handle"
+                :class="{ 'bw-drag-handle--over': dragOverIdx === 2 && dragIndex !== 2 }"
+                draggable="true"
+                @dragstart="onDragStart(2)"
+                @dragend="onDragEnd"
+                @dragover.prevent="dragOverIdx = 2"
+                @dragleave="dragOverIdx = null"
+                @drop="onDrop(2)"
+              >
+                <q-icon name="drag_indicator" size="18px" />
+              </div>
+              <component :is="singleComponents[columnOrder[2]]" v-if="columnOrder[2] !== 'actionstack'" />
+              <ActionFollowUpStack v-else v-model="splitStack" @resized="saveSplits" />
+            </div>
           </template>
         </q-splitter>
       </template>
@@ -103,45 +93,41 @@
 import { ref, type Component } from "vue";
 import MeetingsPanel from "../components/MeetingsPanel.vue";
 import MeetingsOverviewPanel from "../components/MeetingsOverviewPanel.vue";
-import FollowUpsPanel from "../components/FollowUpsPanel.vue";
-import ActionItemsPanel from "../components/ActionItemsPanel.vue";
+import ActionFollowUpStack from "../components/ActionFollowUpStack.vue";
 
-type PanelKey = "meetings" | "overview" | "followups" | "actionitems";
+// "actionstack" is the combined Action Items (top) / Follow-ups (bottom)
+// column — the two panels always keep that relative order and are dragged
+// as a single unit; only which of the 3 columns they occupy is reorderable.
+type ColumnKey = "meetings" | "overview" | "actionstack";
 
-// Order here is also the default layout (left to right) for a fresh
-// browser with no saved localStorage yet — Action Items added 2026-07-16
-// as its own panel (was briefly merged into Follow-ups, split back out per
-// Peter's request), placed last/rightmost by default since that's roughly
-// where he wanted it; drag-reorder (see onDrop) moves it from there.
-const ALL_KEYS: PanelKey[] = ["meetings", "overview", "followups", "actionitems"];
+// Left-to-right default for a fresh browser with no saved localStorage yet.
+const ALL_KEYS: ColumnKey[] = ["meetings", "overview", "actionstack"];
 
-const panelComponents: Record<PanelKey, Component> = {
+const singleComponents: Partial<Record<ColumnKey, Component>> = {
   meetings: MeetingsPanel,
   overview: MeetingsOverviewPanel,
-  followups: FollowUpsPanel,
-  actionitems: ActionItemsPanel,
 };
 
 // Plain localStorage, not the in-memory-only rule that applies to sandboxed
 // chat artifacts — this is a real app running in the user's own browser, so
 // persisting layout preferences across reloads is exactly what it's for.
-const ORDER_KEY = "good-wrap-dashboard-panel-order";
-const SPLIT_KEY = "good-wrap-dashboard-splits";
+const ORDER_KEY = "good-wrap-dashboard-column-order";
+const SPLIT_KEY = "good-wrap-dashboard-splits-v2";
 
-function loadOrder(): PanelKey[] {
+function loadOrder(): ColumnKey[] {
   try {
     const raw = localStorage.getItem(ORDER_KEY);
     if (!raw) return [...ALL_KEYS];
     const parsed = JSON.parse(raw);
-    // A saved order from before Action Items existed (length 3) no longer
-    // matches — fall back to the default 4-panel order rather than crash
-    // or silently drop a panel.
+    // A saved order from the previous 4-panel layout (or any other stale
+    // shape) no longer matches — fall back to the default 3-column order
+    // rather than crash or silently drop a column.
     if (
       Array.isArray(parsed) &&
       parsed.length === ALL_KEYS.length &&
       parsed.every((k) => ALL_KEYS.includes(k))
     ) {
-      return parsed as PanelKey[];
+      return parsed as ColumnKey[];
     }
   } catch {
     // malformed/stale localStorage value — fall through to the default order
@@ -149,39 +135,38 @@ function loadOrder(): PanelKey[] {
   return [...ALL_KEYS];
 }
 
-function loadSplits(): { outer: number; inner1: number; inner2: number } {
+function loadSplits(): { outer: number; inner1: number; stack: number } {
   try {
     const raw = localStorage.getItem(SPLIT_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Accept the current 3-value shape; fall back to even quarters for
-      // anything else (e.g. a pre-Action-Items save with only outer/inner).
       if (
         typeof parsed?.outer === "number" &&
         typeof parsed?.inner1 === "number" &&
-        typeof parsed?.inner2 === "number"
+        typeof parsed?.stack === "number"
       ) {
         return parsed;
       }
     }
   } catch {
-    // malformed/stale value — fall through to the even 4-way default
+    // malformed/stale value (e.g. the old 4-panel SPLIT_KEY shape) — fall
+    // through to the even 3-way default instead
   }
-  return { outer: 25, inner1: 33.33, inner2: 50 };
+  return { outer: 25, inner1: 37.5, stack: 55 };
 }
 
 const initialSplits = loadSplits();
-const panelOrder = ref<PanelKey[]>(loadOrder());
+const columnOrder = ref<ColumnKey[]>(loadOrder());
 const splitOuter = ref(initialSplits.outer);
 const splitInner1 = ref(initialSplits.inner1);
-const splitInner2 = ref(initialSplits.inner2);
+const splitStack = ref(initialSplits.stack);
 const dragIndex = ref<number | null>(null);
 const dragOverIdx = ref<number | null>(null);
 
 function saveSplits() {
   localStorage.setItem(
     SPLIT_KEY,
-    JSON.stringify({ outer: splitOuter.value, inner1: splitInner1.value, inner2: splitInner2.value })
+    JSON.stringify({ outer: splitOuter.value, inner1: splitInner1.value, stack: splitStack.value })
   );
 }
 
@@ -197,10 +182,10 @@ function onDragEnd() {
 function onDrop(idx: number) {
   dragOverIdx.value = null;
   if (dragIndex.value === null || dragIndex.value === idx) return;
-  const next = [...panelOrder.value];
+  const next = [...columnOrder.value];
   const [moved] = next.splice(dragIndex.value, 1);
   next.splice(idx, 0, moved);
-  panelOrder.value = next;
+  columnOrder.value = next;
   localStorage.setItem(ORDER_KEY, JSON.stringify(next));
   dragIndex.value = null;
 }

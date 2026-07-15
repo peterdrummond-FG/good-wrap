@@ -35,6 +35,17 @@ body {
   border: 1px solid var(--bw-border);
   border-radius: 16px;
   height: 100%;
+  min-height: 0;
+}
+
+/* The dashboard's 3-column splitter layout sizes itself off this container,
+   which is always the current viewport height minus the header — so
+   dragging a splitter or resizing the browser window keeps every column
+   proportional to whatever space is actually available, rather than any
+   panel assuming a fixed pixel width/height. */
+.bw-dashboard-page {
+  height: calc(100vh - 50px);
+  min-height: 0;
 }
 
 /* --- reorderable + width-resizable dashboard slots --------------------------
@@ -50,7 +61,24 @@ body {
 .bw-panel-slot {
   position: relative;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   padding-right: 8px;
+}
+
+/* --- stacked column (Action Items over Follow-ups, added 2026-07-16) -----
+   Sits inside a bw-panel-slot's q-splitter (horizontal/top-bottom mode).
+   min-height: 0 is required here (not just on the outer slot) so each half
+   can actually shrink below its content size instead of overflowing the
+   splitter when the window gets short — the same reason bw-panel-slot needs
+   it for width. */
+.bw-stack-slot {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.bw-stack-slot--top {
+  padding-bottom: 6px;
 }
 .bw-drag-handle {
   position: absolute;
@@ -81,6 +109,15 @@ body {
 /* Room for the grip icon so it doesn't sit on top of the panel title. */
 .bw-panel-slot .bw-panel__header {
   padding-left: 40px;
+}
+/* The grip icon for the Action Items/Follow-ups stack lives in the shared
+   parent bw-panel-slot's top-left corner, which only needs the *top* panel's
+   header (Action Items) to make room for it — the bottom panel's header
+   (Follow-ups) should stay flush left like any other panel. Equal
+   specificity to the rule above, but placed after it, so this wins for the
+   bottom slot only. */
+.bw-stack-slot--bottom .bw-panel__header {
+  padding-left: 20px;
 }
 .q-splitter__separator {
   background: var(--bw-border) !important;
