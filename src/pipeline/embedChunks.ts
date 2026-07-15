@@ -25,7 +25,12 @@
 import { EmbeddingModel, FlagEmbedding } from "fastembed";
 import { withRetry } from "../util/retry";
 
-const PASSAGE_BATCH_SIZE = 32;
+// Lowered from 32 (2026-07-15): Railway's plan caps this service at 1GB
+// memory with no headroom to raise it, and a batch of 32 chunks' worth of
+// simultaneous ONNX tensors was enough to OOM-kill the container during
+// /process on at least one meeting. Smaller batches trade a bit of speed
+// for materially lower peak memory per embedding call.
+const PASSAGE_BATCH_SIZE = 8;
 
 let modelPromise: Promise<FlagEmbedding> | null = null;
 
