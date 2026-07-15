@@ -248,3 +248,58 @@ Run with `npm run api` (defaults to port 4000, override with `PORT`).
 **Frontend** (`dashboard/`, a separate Vite project — deliberately not part of the root `package.json`, since this whole folder is meant to be thrown away/absorbed into the hub, not maintained long-term): Vue 3 + Quasar, matching Peter's actual hub stack so the eventual rewrite is porting components, not learning a new framework. Four pages: meeting list, meeting detail (keywords/takeaways/follow-ups as chips and lists, collapsible full transcript, a "Process this meeting" button if Stage 2 hasn't run yet), the Stage 0 capture form, and a Stage 5 "Ask" page. Run with `cd dashboard && npm install && npm run dev` (port 5173, proxies `/api` to the backend on port 4000).
 
 **Verification done:** `npx tsc --noEmit` (backend) and `npx vue-tsc -b && vite build` (frontend) both pass clean; the built frontend serves correctly via `vite preview`. **Not yet done:** visual/interactive check in an actual browser, and a live run against the real Supabase DB (same blocker as Stages 2/3/5 — needs `ANTHROPIC_API_KEY` and `DATABASE_URL` in `.env`). Once those are in place: `npm run api` in one terminal, `cd dashboard && npm run dev` in another, then open http://localhost:5173.
+
+---
+
+## 13. Session Update: Dashboard Restyle, Auto-Processing, Retry Logic, GitLab Backup (2026-07-15)
+
+Everything below is live-tested in an actual browser (not just typechecked) against Peter's real running dev servers, and is now pushed to GitLab (see below).
+
+**Dashboard restyled to match Peter's Figma reference** (a "BotBuzz" AI-chat app): dark theme, purple accent (`#7c6fee`), card-style panels. `dashboard/src/styles/theme.css` overrides Quasar's dark-mode CSS variables; `dashboard/src/App.vue` is a `q-layout` with a slim header and a left nav drawer (logo, Dashboard/Capture/Ask nav items with active-pill styling).
+
+**Dashboard home page (`Dashboard.vue`) restructured into 3 simultaneous panels**, all visible at once rather than separate routes:
+- **Meetings** (`MeetingsPanel.vue`) — flat list, Capture button in the header
+- **Meetings Overview** (`MeetingsOverviewPanel.vue`) — grouped by Today/Yesterday/This Week/Older, shows each meeting's top 3 takeaways
+- **Follow-ups** (`FollowUpsPanel.vue`) — grouped by Tomorrow/This Week/Next Week/Other, shows who each follow-up is with and which meeting it came from
+
+Panels fill the viewport height and scroll internally (not the whole page). Width is resizable via nested Quasar `q-splitter`s (drag in the gap between panels — no separate resize handle needed, `q-splitter` already shows a `col-resize` cursor on hover). Order is changeable via a small unlabeled `drag_indicator` icon in each panel's own top-left corner (native HTML5 drag-and-drop). Panel order and splitter widths persist to `localStorage` (legitimate here since this is a real browser app the user reopens, not a Claude.ai artifact).
+
+**Ask page is now a real multi-turn chat UI** (`q-chat-message` bubbles). Along the way, fixed a genuine Vue reactivity bug worth remembering: pushing a plain object into a `ref` array and mutating it later (e.g. filling in the answer after the API responds) does *not* trigger a re-render — the object has to be wrapped in `reactive()` at creation time.
+
+**Follow-ups are now structured**, not plain strings: `FollowUpItem { text, person, timing }` (`db/schema.ts`). `extractInsights.ts` passes Claude the meeting's actual date and real participant names, and only fills in `person`/`timing` when the transcript genuinely supports it (verified live: Claude correctly attributed a follow-up to a named participant and correctly tagged "tomorrow" based on the transcript, without guessing when it shouldn't).
+
+**Meetings now auto-process immediately on capture.** `POST /api/meetings` (`src/server/app.ts`) calls `captureManualMeeting` then `runFullPipeline` in its own try/catch, so a processing failure (e.g. a flaky Claude API call) never fails the capture itself — the meeting is still safely saved, just flagged `processed: false` with a `processingError`. The dashboard's capture form shows a warning toast in that case. A manual **"Reprocess meeting"** button remains on the meeting detail page regardless of processed state, as a fallback / re-run option. `src/ingest/cli.ts` (the manual capture CLI) got the same auto-process behavior for consistency. This mirrors exactly what Stage 6's future Zoom webhook will do — no changes needed there later.
+
+**Added retry-with-backoff** (`src/util/retry.ts`, `withRetry()` — up to 2 retries, 1s/2s delay) around both external calls in the Stage 2 pipeline: `extractInsights.ts`'s Claude API call and `embedChunks.ts`'s local embedding calls. Triggered by the process endpoint intermittently returning a 400 that succeeded immediately on a plain retry with identical input — a transient blip, not a real bug. While in there, also fixed a related latent bug in `embedChunks.ts`: the cached model-init promise wasn't cleared on failure, so a single transient failure loading the local embedding model would have permanently broken every future call until the server restarted.
+
+### GitLab backup: DONE (2026-07-15)
+
+This repo is now pushed to `gitlab.com/peterdrummond-fg-group/good-wrap`, `main` branch (commit `7cc2710` at time of writing). Local `master` tracks `origin/main`, so plain `git pull`/`git push` work going forward. Gotchas hit along the way, worth knowing if this ever comes up again:
+
+- GitLab no longer accepts your account password for `git push` over HTTPS — it needs a **Personal Access Token** (`write_repository` scope), used as the password when prompted.
+- The GitLab repo already had a separate, unrelated commit history from an earlier session where files (`schema.ts`, `drizzle.config.ts`, `Project-Handoff-Brief.md`, `package.json`) had been uploaded directly through GitLab's web UI, outside of any local git clone. Merging this local repo into that required `git pull origin main --no-rebase --allow-unrelated-histories`. Peter resolved the resulting add/add conflicts by deleting the stale files via GitLab's web UI and re-running the merge, which then went through clean.
+- Nine empty (0-byte) `smoke_*.ts` placeholder files at the project root are harmless leftover junk from earlier debugging sessions — not committed, safe to delete by hand whenever convenient.
+- `.gitignore` now also excludes recurring stray build artifacts that have shown up in `dashboard/src` (vue-tsc debug dumps like `App.vue.js`/`AskPage.vue.js`, stale compiled `main.js`/`api.js`/`router/index.js` shadowing the real `.ts` sources, and Vite's `vite.config.ts.timestamp-*.mjs` temp files). If these reappear, they're tool noise, not something to fix or commit.
+- Your global git identity isn't set (commits are auto-attributing to `peterdrummond@Peters-MacBook-Pro.local`) — worth running `git config --global user.name "Peter Drummond"` and `git config --global user.email "peter.drummond@flippengroup.com"` at some point so future commits use your real identity instead of the auto-detected one.
+
+### Still open / not yet done
+
+- **Hub integration** (Section 8) — the dashboard is still a standalone POC, not yet merged into Peter's actual hub app. Those integration questions (repo layout, module convention, state management, design system, auth mechanics, API surface) are still unanswered.
+- **Real email/chat notification providers** (Section 6) — `channels/email.ts` and `channels/chat.ts` are still stubs that log `pending`, not `sent`.
+- **Stage 6** (live Zoom webhook) and **Stage 7** (proactive prep) — both still deferred, untouched since the original brief.
+- No auth on the dashboard/API yet — still fine for a personal-use POC, but a blocker before this becomes multi-user or hub-embedded.
+
+### Quick start for a new session
+
+```
+cd "good-wrap"
+npm install                          # root (backend/pipeline)
+npm run api                          # starts Fastify backend on :4000
+
+# in a second terminal
+cd dashboard
+npm install
+npm run dev                          # starts Vite dashboard on :5173, proxies /api to :4000
+```
+
+Needs `ANTHROPIC_API_KEY` and `DATABASE_URL` in `.env` (see `.env.example`) — both already set up on Peter's machine as of this session. Open `http://localhost:5173` for the dashboard.
