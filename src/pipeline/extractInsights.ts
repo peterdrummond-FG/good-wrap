@@ -45,11 +45,14 @@ export interface ExtractInsightsResult {
 
 // Raw shape Claude's tool call returns, before `approved: false` is stamped
 // onto every item by this module.
+type RawActionItem = { text: string; urgency: FollowUpItem["urgency"] };
+type RawFollowUp = { text: string; person: string | null; urgency: FollowUpItem["urgency"] };
+
 interface RawExtractInsightsResult {
   keywords?: string[];
   takeaways?: string[];
-  actionItems?: { text: string; urgency: FollowUpItem["urgency"] }[];
-  followUps?: { text: string; person: string | null; urgency: FollowUpItem["urgency"] }[];
+  actionItems?: RawActionItem[];
+  followUps?: RawFollowUp[];
 }
 
 const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
@@ -215,12 +218,34 @@ export async function extractInsights(
 
       const result = toolUse.input as RawExtractInsightsResult;
 
+      // Forced tool-use is supposed to guarantee this shape, but it's not a
+      // hard guarantee — hit live (2026-07-16) where Claude returned
+      // `actionItems` as something other than an array, and `?? []` only
+      // guards against null/undefined, not "defined but the wrong type".
+      // That crashed the ENTIRE extraction on `.map is not a function`,
+      // losing keywords/takeaways/follow-ups too, not just the one bad
+      // category. Coerce defensively instead so one malformed field doesn't
+      // take down everything else Claude got right.
+      const toArray = <T>(value: unknown, label: string): T[] => {
+        if (Array.isArray(value)) return value as T[];
+        if (value !== undefined) {
+          console.warn(`extractInsights: expected an array for "${label}", got`, value);
+        }
+        return [];
+      };
+
       return {
-        keywords: result.keywords ?? [],
+        keywords: toArray<string>(result.keywords, "keywords"),
         // Takeaways: no review step — always approved (see the type comment above).
-        takeaways: (result.takeaways ?? []).map((text) => ({ text, approved: true })),
-        actionItems: (result.actionItems ?? []).map((item) => ({ ...item, approved: false })),
-        followUps: (result.followUps ?? []).map((item) => ({ ...item, approved: false })),
+        takeaways: toArray<string>(result.takeaways, "takeaways").map((text) => ({ text, approved: true })),
+        actionItems: toArray<RawActionItem>(result.actionItems, "actionItems").map((item) => ({
+          ...item,
+          approved: false,
+        })),
+        followUps: toArray<RawFollowUp>(result.followUps, "followUps").map((item) => ({
+          ...item,
+          approved: false,
+        })),
       };
     },
     {
