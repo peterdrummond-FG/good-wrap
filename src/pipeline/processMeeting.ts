@@ -47,7 +47,7 @@ export async function processMeeting(
   if (!context) {
     throw new Error(`No meeting found for id ${meetingId}`);
   }
-  const { meeting, transcript, owner, participantNames, participants } = context;
+  const { meeting, transcript, owner, participantNames, participants, knownPeopleNames } = context;
 
   // Capture whatever's currently approved before Claude generates a fresh
   // candidate set, so a reprocess can carry real review work forward instead
@@ -65,6 +65,7 @@ export async function processMeeting(
     meetingDate: meeting.startTime.toISOString(),
     participantNames,
     ownerName: owner.name,
+    knownPeopleNames,
   });
 
   // Takeaways are auto-approved with no review step (see

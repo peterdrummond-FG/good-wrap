@@ -38,7 +38,7 @@ export async function regenerateInsightCategory(
   // can't drift out of sync on how any of this is resolved.
   const context = await loadMeetingContext(meetingId);
   if (!context) return null;
-  const { meeting, transcript, owner, participantNames, participants } = context;
+  const { meeting, transcript, owner, participantNames, participants, knownPeopleNames } = context;
 
   // Capture what's currently approved in the targeted category so it isn't
   // lost when it's replaced below — see mergeApprovedForward.
@@ -51,6 +51,7 @@ export async function regenerateInsightCategory(
     meetingDate: meeting.startTime.toISOString(),
     participantNames,
     ownerName: owner.name,
+    knownPeopleNames,
   });
 
   switch (category) {

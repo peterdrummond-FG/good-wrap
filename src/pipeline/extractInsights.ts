@@ -47,6 +47,14 @@ export interface ExtractInsightsInput {
   // defaulted to filing the owner's own tasks as follow-ups attributed to
   // them by name instead of as action items.
   ownerName: string;
+  // Everyone Peter's ever met with, not just this meeting's attendees (added
+  // 2026-07-16) — lets a follow-up be attributed to someone the transcript
+  // mentions needing to follow up with even though they weren't in this
+  // meeting (e.g. "we need to check with Ray about X"), as long as they
+  // match someone already known from a past meeting. Deliberately NOT a
+  // path for inventing a person record for a name never seen before — if
+  // there's no match here, `person` should come back null.
+  knownPeopleNames: string[];
 }
 
 // Action items/follow-ups are suggest-then-approve (2026-07-16) — Claude
@@ -154,11 +162,17 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
             person: {
               type: ["string", "null"],
               description:
-                "Which attendee this follow-up is waiting on or should be discussed with next, if " +
-                "the transcript makes that clear. Must exactly match one of the provided " +
-                "participant names, and must NEVER be the meeting owner — null if no specific " +
-                "person is identifiable, or if it's an unconfirmed item rather than someone else's " +
-                "task.",
+                "Who this follow-up is waiting on or should be discussed with next, if the " +
+                "transcript makes that clear. If they were a meeting participant, use their exact " +
+                "name from the participant names list. If the transcript mentions needing to " +
+                "follow up with someone who was NOT in this meeting (e.g. \"we need to check with " +
+                "Ray about X\"), match them against the provided known-contacts list — even if " +
+                "only a first name or informal name was used — and use their exact full name from " +
+                "that list. Use null if no participant or known contact clearly matches, if it's " +
+                "ambiguous (e.g. more than one plausible match), or if it's an unconfirmed item " +
+                "rather than someone's task. Never invent a name that isn't in either list. Must " +
+                "NEVER be the meeting owner, whether their name appears in the participant list or " +
+                "the known-contacts list.",
             },
             urgency: URGENCY_PROPERTY,
           },
@@ -192,11 +206,18 @@ const SYSTEM_PROMPT =
   "that's an action item too, even if their own reply doesn't repeat the task in full.\n" +
   "- followUps: 5-8 CANDIDATE things any OTHER participant needs to do, or unconfirmed items " +
   "worth a reminder, for the same human reviewer. NEVER the meeting owner's own task, even one " +
-  "the owner mentions offhand — that belongs in actionItems, not here.\n\n" +
+  "the owner mentions offhand — that belongs in actionItems, not here. A follow-up's task can " +
+  "also belong to someone who WASN'T in this meeting at all — e.g. \"we need to check with Ray " +
+  "about X\" — see the person field's rules below for how to attribute those.\n\n" +
   "For actionItems and followUps, assign urgency based on genuine signals in the transcript — " +
   "default to \"medium\" rather than forcing \"high\" or \"low\" without real support. For " +
-  "followUps, only assign a person when the transcript actually supports it — leave it null " +
-  "rather than guessing, and never assign the owner as the person.\n\n" +
+  "followUps, only assign a person when the transcript actually supports it. This can be a " +
+  "meeting participant, OR someone mentioned who wasn't in the meeting — for an absent person, " +
+  "match their name (even an informal first-name-only mention) against the provided " +
+  "known-contacts list and use their exact full name from it; if there's no clear, unambiguous " +
+  "match there, leave person null rather than guessing or inventing a name. Never assign the " +
+  "owner as the person, whether their name appears in the participant list or the known-contacts " +
+  "list.\n\n" +
   "Before finalizing, re-read your actionItems and followUps side by side as a cross-check: " +
   "anything about the owner's OWN work belongs in actionItems, not followUps, and should not " +
   "appear in both. If actionItems looks thin or empty, treat that as a sign you scanned too " +
@@ -248,7 +269,11 @@ async function callExtraction(input: ExtractInsightsInput, model: string): Promi
               `Meeting owner (find THIS person's action items, and never attribute a follow-up ` +
               `to them): ${input.ownerName}\n` +
               `Participant names (use exactly these for a follow-up's "person", or null): ` +
-              `${input.participantNames.join(", ") || "(none recorded)"}\n\n` +
+              `${input.participantNames.join(", ") || "(none recorded)"}\n` +
+              `Known contacts from other meetings (match an absent person mentioned in the ` +
+              `transcript against this list, even if only a first name was used — use their ` +
+              `exact full name from here; use null if there's no clear, unambiguous match): ` +
+              `${input.knownPeopleNames.join(", ") || "(none recorded)"}\n\n` +
               `Transcript:\n${input.transcript}`,
           },
         ],

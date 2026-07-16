@@ -8,7 +8,7 @@
 
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db/client";
-import { getMeetingOwner, type MeetingOwner } from "../server/queries";
+import { getMeetingOwner, listPeople, type MeetingOwner } from "../server/queries";
 
 export interface MeetingContext {
   meeting: typeof schema.meetings.$inferSelect;
@@ -18,6 +18,10 @@ export interface MeetingContext {
   participantNames: string[];
   /** Same names, comma-joined for display/prompt text — "Unknown" if none recorded. */
   participants: string;
+  /** Everyone Peter's ever met with, not just this meeting's attendees — lets
+   * a follow-up be attributed to someone mentioned but not present (added
+   * 2026-07-16, see extractInsights.ts's ExtractInsightsInput comment). */
+  knownPeopleNames: string[];
 }
 
 /**
@@ -61,5 +65,8 @@ export async function loadMeetingContext(meetingId: string): Promise<MeetingCont
   const participantNames = participantRows.map((p) => p.name ?? p.email ?? "Unknown");
   const participants = participantNames.join(", ") || "Unknown";
 
-  return { meeting, transcript, owner, participantNames, participants };
+  const knownPeople = await listPeople();
+  const knownPeopleNames = knownPeople.map((p) => p.name);
+
+  return { meeting, transcript, owner, participantNames, participants, knownPeopleNames };
 }

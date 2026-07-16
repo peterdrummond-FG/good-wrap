@@ -262,7 +262,7 @@
                           <div class="row items-center q-gutter-x-sm">
                             <q-select
                               v-model="f.person"
-                              :options="meeting.participants"
+                              :options="followUpPersonOptions"
                               label="Person"
                               dense
                               borderless
@@ -444,6 +444,7 @@ import { Dialog, Notify } from "quasar";
 import {
   deleteMeeting,
   fetchMeetingDetail,
+  fetchPeople,
   processMeeting,
   regenerateInsightCategory,
   sendActionItemToAsana,
@@ -477,6 +478,31 @@ const processing = ref(false);
 const deleting = ref(false);
 const saving = ref(false);
 const error = ref("");
+
+// Everyone Peter's ever met with, not just this meeting's attendees — lets a
+// follow-up be manually reassigned to someone who wasn't in this meeting,
+// consistent with what the AI can now attribute automatically (2026-07-16).
+// Fetched once on mount; if it fails, the dropdown just falls back to this
+// meeting's attendees, so this isn't wrapped in the page's error banner.
+const allKnownPeopleNames = ref<string[]>([]);
+onMounted(async () => {
+  try {
+    const result = await fetchPeople();
+    allKnownPeopleNames.value = result.people.map((p) => p.name);
+  } catch {
+    // Non-critical — see comment above.
+  }
+});
+
+// This meeting's attendees first, then everyone else known, alphabetically.
+const followUpPersonOptions = computed(() => {
+  const attendees = meeting.value?.participants ?? [];
+  const attendeeSet = new Set(attendees);
+  const others = allKnownPeopleNames.value
+    .filter((name) => !attendeeSet.has(name))
+    .sort((a, b) => a.localeCompare(b));
+  return [...attendees, ...others];
+});
 
 // --- metadata edit (topic/date/duration/participants/keywords) ------------
 const editing = ref(false);
