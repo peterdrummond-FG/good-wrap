@@ -21,7 +21,7 @@
 import { readFileSync } from "node:fs";
 import { captureManualMeeting, type CaptureManualMeetingInput } from "./captureManualMeeting";
 import { runFullPipeline } from "../pipeline/runFullPipeline";
-import { closeDb } from "../db/client";
+import { runCli } from "../util/runCli";
 
 async function readInput(): Promise<CaptureManualMeetingInput> {
   const filePath = process.argv[2];
@@ -69,12 +69,4 @@ async function main() {
   }
 }
 
-main()
-  .catch((err) => {
-    console.error("Capture failed:", err.message ?? err);
-    if (err.cause) console.error("Caused by:", err.cause.message ?? err.cause);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closeDb();
-  });
+runCli("Capture", main);

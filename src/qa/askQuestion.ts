@@ -10,7 +10,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { embedQuery } from "../pipeline/embedChunks";
-import { requireEnv } from "../util/env";
+import { getClaudeClient, getClaudeModel, getToolUseInput } from "../util/claude";
 
 const TOP_K = 8;
 
@@ -83,14 +83,6 @@ const ANSWER_TOOL: Anthropic.Tool = {
   },
 };
 
-let client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!client) {
-    client = new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY") });
-  }
-  return client;
-}
-
 export async function askQuestion(question: string): Promise<AskQuestionResult> {
   const chunks = await retrieveChunks(question);
 
@@ -110,9 +102,9 @@ export async function askQuestion(question: string): Promise<AskQuestionResult> 
     )
     .join("\n\n---\n\n");
 
-  const model = process.env.CLAUDE_MODEL || "claude-sonnet-5";
+  const model = getClaudeModel();
 
-  const message = await getClient().messages.create({
+  const message = await getClaudeClient().messages.create({
     model,
     max_tokens: 1024,
     system:
@@ -129,14 +121,10 @@ export async function askQuestion(question: string): Promise<AskQuestionResult> 
     ],
   });
 
-  const toolUse = message.content.find(
-    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-  );
-  if (!toolUse) {
-    throw new Error("Claude did not return a tool_use block for record_answer.");
-  }
-
-  const result = toolUse.input as { answer: string; citedMeetingIds?: string[] };
+  const result = getToolUseInput(message, "record_answer") as {
+    answer: string;
+    citedMeetingIds?: string[];
+  };
   const citedIds = new Set(result.citedMeetingIds ?? []);
 
   const seenMeetingIds = new Set<string>();

@@ -35,9 +35,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed } from "vue";
 import { fetchMeetings, type MeetingListItem, type ReviewStatus } from "../api";
 import { bucketByRecency } from "../dateBuckets";
+import { useAsyncList } from "../composables/useAsyncList";
 
 function emptyLabel(status: ReviewStatus): string {
   return {
@@ -47,9 +48,11 @@ function emptyLabel(status: ReviewStatus): string {
   }[status];
 }
 
-const meetings = ref<MeetingListItem[]>([]);
-const loading = ref(true);
-const error = ref("");
+const {
+  data: meetings,
+  loading,
+  error,
+} = useAsyncList(async () => (await fetchMeetings()).meetings, [] as MeetingListItem[]);
 
 // Short form (just the time) — the section label ("Today", "Yesterday", ...)
 // already carries the day, so repeating a full date next to every meeting
@@ -76,16 +79,5 @@ const groups = computed(() => {
     { label: "This Week", items: buckets.thisWeek },
     { label: "Older", items: buckets.older },
   ];
-});
-
-onMounted(async () => {
-  try {
-    const result = await fetchMeetings();
-    meetings.value = result.meetings;
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    loading.value = false;
-  }
 });
 </script>

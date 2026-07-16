@@ -385,7 +385,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Dialog, Notify } from "quasar";
 import {
@@ -393,15 +393,16 @@ import {
   fetchMeetingDetail,
   processMeeting,
   regenerateInsightCategory,
-  submitMeetingReview,
   updateMeeting,
   updateMeetingInsights,
   type MeetingDetail,
   type RegenerateCategory,
-  type ReviewStatus,
   type Urgency,
 } from "../api";
 import { sortByUrgency, urgencyLabel, urgencyPillClass } from "../urgency";
+import { formatMeetingDateTime as formatDate } from "../formatDate";
+import { reviewStatusDetailLabel as reviewStatusLabel, reviewStatusPillClass as pillClass } from "../reviewStatus";
+import { useReviewCategory } from "../composables/useReviewCategory";
 import PersonTag from "../components/PersonTag.vue";
 
 const props = defineProps<{ id: string }>();
@@ -429,99 +430,66 @@ const newKeyword = ref("");
 // column for anything Claude missed. Takeaways aren't included here at all
 // (see the template's Takeaways column comment) — they're read directly
 // from meeting.insights.takeaways since there's nothing to review/toggle.
-const reviewActionItems = ref<{ text: string; urgency: Urgency; approved: boolean }[]>([]);
-const reviewFollowUps = ref<{ text: string; person: string | null; urgency: Urgency; approved: boolean }[]>(
-  []
-);
+//
+// Action Items and Follow-ups share one implementation (useReviewCategory) —
+// a working copy, dirty-tracking against a save/regenerate baseline,
+// edit-mode collapse, and per-panel save/notification logic, parametrized by
+// this category's item shape and whether it's urgency-sorted. Follow-ups is
+// (Peter's request); Action Items isn't (his "just copyable, no ranking"
+// ask, extended from the dashboard panel to this review column too).
+const actionItemsReview = useReviewCategory<{ text: string; urgency: Urgency; approved: boolean }>({
+  meetingId: props.id,
+  meeting,
+  read: (m) => ({ items: m.insights!.actionItems, reviewedAt: m.insights!.actionItemsReviewedAt }),
+  makeNewItem: (text) => ({ text, urgency: "medium", approved: true }),
+  snapshotFields: (a) => ({ text: a.text, urgency: a.urgency, approved: a.approved }),
+  buildPayload: (items) => ({ actionItems: items }),
+  readJustReviewed: (result) => result.justReviewedActionItems,
+});
 
-// Follow-ups are shown most-urgent-first (changed 2026-07-16, per Peter — see
-// urgency.ts). sortByUrgency returns a new array without touching item
-// identity, so the checkboxes here still bind to the same reactive objects
-// backing reviewFollowUps. Action Items dropped urgency sorting/display
-// entirely (changed 2026-07-15 — Peter's original "just copyable, no
-// ranking" ask was scoped to the dashboard panel only at the time, but on
-// reflection he wants the review column unranked too, for consistency) —
-// reviewActionItems is used directly in the template, in whatever order the
-// API returned it.
-const sortedReviewFollowUps = computed(() => sortByUrgency(reviewFollowUps.value));
-const newActionItemText = ref("");
-const newFollowUpText = ref("");
+const followUpsReview = useReviewCategory<{
+  text: string;
+  person: string | null;
+  urgency: Urgency;
+  approved: boolean;
+}>({
+  meetingId: props.id,
+  meeting,
+  read: (m) => ({ items: m.insights!.followUps, reviewedAt: m.insights!.followUpsReviewedAt }),
+  makeNewItem: (text) => ({ text, person: null, urgency: "medium", approved: true }),
+  snapshotFields: (f) => ({ text: f.text, person: f.person, urgency: f.urgency, approved: f.approved }),
+  sortForDisplay: sortByUrgency,
+  buildPayload: (items) => ({ followUps: items }),
+  readJustReviewed: (result) => result.justReviewedFollowUps,
+});
+
+const reviewActionItems = actionItemsReview.items;
+const newActionItemText = actionItemsReview.newItemText;
+const addActionItem = actionItemsReview.addItem;
+const actionItemsDirty = actionItemsReview.dirty;
+const savingActionItems = actionItemsReview.saving;
+const showActionItemsChecklist = actionItemsReview.showChecklist;
+const approvedActionItems = actionItemsReview.approvedItems;
+
+const reviewFollowUps = followUpsReview.items;
+const sortedReviewFollowUps = followUpsReview.displayItems;
+const newFollowUpText = followUpsReview.newItemText;
+const addFollowUp = followUpsReview.addItem;
+const followUpsDirty = followUpsReview.dirty;
+const savingFollowUps = followUpsReview.saving;
+const showFollowUpsChecklist = followUpsReview.showChecklist;
+const approvedFollowUps = followUpsReview.approvedItems;
 
 // --- pencil-triggered edit/regenerate state (added 2026-07-16) ------------
 // Once a meeting is reviewed, Action Items/Follow-ups collapse to a plain
 // bulleted list of approved items (see showActionItemsChecklist/
-// showFollowUpsChecklist below) — the pencil on each column re-opens the
+// showFollowUpsChecklist above) — the pencil on each column re-opens the
 // checkbox/add-your-own view. Takeaways have no such collapse (always
 // bulleted); their pencil only reveals the "Regenerate" button.
 const editModeTakeaways = ref(false);
-const editModeActionItems = ref(false);
-const editModeFollowUps = ref(false);
+const editModeActionItems = actionItemsReview.editMode;
+const editModeFollowUps = followUpsReview.editMode;
 const regeneratingCategory = ref<RegenerateCategory | null>(null);
-
-// --- per-panel save + dirty-tracking (added 2026-07-16) -------------------
-// Each of Action Items/Follow-ups now saves independently instead of sharing
-// one meeting-wide "Save selections" button. A baseline snapshot is taken
-// whenever that panel's working copy is (re)seeded from the server — on
-// initial load, after that panel's own save, and after that panel's own
-// regenerate. The Save button stays disabled until the working copy differs
-// from its baseline (a checkbox toggle or an added item), and enables again
-// the instant it does. Saving/regenerating one panel deliberately only
-// touches that panel's own copy+baseline, so an in-progress edit in the
-// OTHER panel isn't silently discarded.
-const savingActionItems = ref(false);
-const savingFollowUps = ref(false);
-const actionItemsBaseline = ref("[]");
-const followUpsBaseline = ref("[]");
-
-function snapshotActionItems(): string {
-  return JSON.stringify(
-    reviewActionItems.value.map((a) => ({ text: a.text, urgency: a.urgency, approved: a.approved }))
-  );
-}
-function snapshotFollowUps(): string {
-  return JSON.stringify(
-    reviewFollowUps.value.map((f) => ({ text: f.text, person: f.person, urgency: f.urgency, approved: f.approved }))
-  );
-}
-const actionItemsDirty = computed(() => snapshotActionItems() !== actionItemsBaseline.value);
-const followUpsDirty = computed(() => snapshotFollowUps() !== followUpsBaseline.value);
-
-// Per-category now (changed 2026-07-15, CODE-AUDIT.md items #2/#4) — each
-// checks that category's OWN reviewed-at rather than the meeting-wide
-// reviewStatus, so Action Items can be sitting collapsed-and-reviewed while
-// Follow-ups is still showing its checklist (or vice versa), instead of the
-// whole-meeting status forcing both panels to stay in lockstep.
-const showActionItemsChecklist = computed(
-  () => !meeting.value?.insights?.actionItemsReviewedAt || editModeActionItems.value
-);
-const showFollowUpsChecklist = computed(
-  () => !meeting.value?.insights?.followUpsReviewedAt || editModeFollowUps.value
-);
-const approvedActionItems = computed(() =>
-  (meeting.value?.insights?.actionItems ?? []).filter((a) => a.approved)
-);
-const approvedFollowUps = computed(() =>
-  sortByUrgency((meeting.value?.insights?.followUps ?? []).filter((f) => f.approved))
-);
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function reviewStatusLabel(status: ReviewStatus): string {
-  return { pending: "Not processed", needs_review: "Needs review", reviewed: "Reviewed" }[status];
-}
-
-function pillClass(status: ReviewStatus): string {
-  return {
-    pending: "bw-pill--pending",
-    needs_review: "bw-pill--needs-review",
-    reviewed: "bw-pill--processed",
-  }[status];
-}
 
 // datetime-local inputs need "YYYY-MM-DDTHH:mm" in local time (no timezone
 // suffix) — Date#toISOString() is UTC, so build the local string by hand.
@@ -539,38 +507,12 @@ function addKeyword() {
   newKeyword.value = "";
 }
 
-function addActionItem() {
-  const value = newActionItemText.value.trim();
-  if (value) reviewActionItems.value.push(reactive({ text: value, urgency: "medium", approved: true }));
-  newActionItemText.value = "";
-}
-
-function addFollowUp() {
-  const value = newFollowUpText.value.trim();
-  if (value)
-    reviewFollowUps.value.push(reactive({ text: value, person: null, urgency: "medium", approved: true }));
-  newFollowUpText.value = "";
-}
-
-// Re-seeds ONE panel's working copy (+ its dirty-tracking baseline) from the
-// latest fetched meeting. Kept separate per panel so saving/regenerating
-// Action Items, say, never clobbers an in-progress unsaved edit sitting in
-// the Follow-ups working copy.
-function resetActionItemsCopy() {
-  reviewActionItems.value = (meeting.value?.insights?.actionItems ?? []).map((a) => reactive({ ...a }));
-  actionItemsBaseline.value = snapshotActionItems();
-}
-function resetFollowUpsCopy() {
-  reviewFollowUps.value = (meeting.value?.insights?.followUps ?? []).map((f) => reactive({ ...f }));
-  followUpsBaseline.value = snapshotFollowUps();
-}
-
 // Re-seeds BOTH review columns — only appropriate on initial load or a full
 // reprocess, where discarding any in-progress edits is correct (a reprocess
 // regenerates every category and resets reviewStatus anyway).
 function initReviewCopies() {
-  resetActionItemsCopy();
-  resetFollowUpsCopy();
+  actionItemsReview.resetCopy();
+  followUpsReview.resetCopy();
 }
 
 async function load() {
@@ -634,45 +576,34 @@ function confirmReprocess() {
 // Saves ONLY this panel's category — the other category is omitted from the
 // request entirely (see ReviewMeetingInput/SubmitReviewInput), so an
 // in-progress unsaved edit sitting in the other panel is left alone rather
-// than being silently persisted or discarded.
+// than being silently persisted or discarded. State work (persist, reseed,
+// collapse edit mode) lives in useReviewCategory's save() — this just adds
+// the page-level error/success feedback around it.
 async function onSaveActionItems() {
-  savingActionItems.value = true;
   error.value = "";
   try {
-    const result = await submitMeetingReview(props.id, { actionItems: reviewActionItems.value });
-    meeting.value = result.meeting;
-    resetActionItemsCopy();
-    // Collapse back to the bulleted view now that there's a fresh save.
-    editModeActionItems.value = false;
+    const { justReviewed } = await actionItemsReview.save();
     Notify.create({
       type: "positive",
-      message: result.justReviewedActionItems ? "Reviewed — notifications sent" : "Action items saved",
+      message: justReviewed ? "Reviewed — notifications sent" : "Action items saved",
       timeout: 3000,
     });
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    savingActionItems.value = false;
   }
 }
 
 async function onSaveFollowUps() {
-  savingFollowUps.value = true;
   error.value = "";
   try {
-    const result = await submitMeetingReview(props.id, { followUps: reviewFollowUps.value });
-    meeting.value = result.meeting;
-    resetFollowUpsCopy();
-    editModeFollowUps.value = false;
+    const { justReviewed } = await followUpsReview.save();
     Notify.create({
       type: "positive",
-      message: result.justReviewedFollowUps ? "Reviewed — notifications sent" : "Follow-ups saved",
+      message: justReviewed ? "Reviewed — notifications sent" : "Follow-ups saved",
       timeout: 3000,
     });
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    savingFollowUps.value = false;
   }
 }
 
@@ -685,8 +616,8 @@ async function onRegenerate(category: RegenerateCategory) {
     // Only reset the copy for the category that was actually regenerated —
     // resetting both here would blow away any in-progress unsaved edit the
     // user has sitting in the OTHER panel.
-    if (category === "actionItems") resetActionItemsCopy();
-    else if (category === "followUps") resetFollowUpsCopy();
+    if (category === "actionItems") actionItemsReview.resetCopy();
+    else if (category === "followUps") followUpsReview.resetCopy();
     if (category === "takeaways") {
       // Takeaways have no separate approve/save step — regenerating IS the
       // save, so collapse the edit affordance back down automatically.

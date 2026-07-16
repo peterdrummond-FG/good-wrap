@@ -4,7 +4,7 @@
 //   npm run ask -- "What did we decide about the budget?"
 
 import { askQuestion } from "./askQuestion";
-import { closeDb } from "../db/client";
+import { runCli } from "../util/runCli";
 
 async function main() {
   const question = process.argv.slice(2).join(" ");
@@ -25,12 +25,4 @@ async function main() {
   }
 }
 
-main()
-  .catch((err) => {
-    console.error("Ask failed:", err.message ?? err);
-    if (err.cause) console.error("Caused by:", err.cause.message ?? err.cause);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closeDb();
-  });
+runCli("Ask", main);

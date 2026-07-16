@@ -72,14 +72,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { fetchFollowUps, type FollowUpWithMeeting } from "../api";
 import { urgencyLabel, urgencyPillClass } from "../urgency";
+import { useAsyncList } from "../composables/useAsyncList";
 import PersonTag from "./PersonTag.vue";
 
-const followUps = ref<FollowUpWithMeeting[]>([]);
-const loading = ref(true);
-const error = ref("");
+const {
+  data: followUps,
+  loading,
+  error,
+} = useAsyncList(async () => (await fetchFollowUps()).followUps, [] as FollowUpWithMeeting[]);
 const groupMode = ref<"urgency" | "person">("urgency");
 
 interface Group {
@@ -132,15 +135,4 @@ const personGroups = computed<Group[]>(() => {
 });
 
 const groups = computed(() => (groupMode.value === "urgency" ? urgencyGroups.value : personGroups.value));
-
-onMounted(async () => {
-  try {
-    const result = await fetchFollowUps();
-    followUps.value = result.followUps;
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    loading.value = false;
-  }
-});
 </script>

@@ -19,10 +19,9 @@
 // The dashboard's pencil-triggered edit view is what lets Peter re-approve
 // the new set via that category's own Save button.
 
-import { eq } from "drizzle-orm";
-import { db, schema } from "../db/client";
+import { updateMeetingInsights, getMeetingDetail, type MeetingDetail } from "../server/queries";
+import { loadMeetingContext } from "./meetingContext";
 import { extractInsights } from "./extractInsights";
-import { updateMeetingInsights, getMeetingDetail, getMeetingOwner, type MeetingDetail } from "../server/queries";
 
 export type RegenerateCategory = "takeaways" | "actionItems" | "followUps";
 
@@ -30,36 +29,11 @@ export async function regenerateInsightCategory(
   meetingId: string,
   category: RegenerateCategory
 ): Promise<MeetingDetail | null> {
-  const [meeting] = await db
-    .select()
-    .from(schema.meetings)
-    .where(eq(schema.meetings.id, meetingId))
-    .limit(1);
-  if (!meeting) return null;
-
-  const [transcript] = await db
-    .select()
-    .from(schema.transcripts)
-    .where(eq(schema.transcripts.meetingId, meetingId))
-    .limit(1);
-  if (!transcript) {
-    throw new Error(`No transcript found for meeting ${meetingId}`);
-  }
-
-  // See processMeeting.ts's identical lookup — same reason, and same shared
-  // helper so the two can't drift out of sync.
-  const owner = await getMeetingOwner(meetingId);
-  if (!owner) {
-    throw new Error(`No owner found for meeting ${meetingId}`);
-  }
-
-  const participantRows = await db
-    .select({ name: schema.people.name, email: schema.people.email })
-    .from(schema.meetingParticipants)
-    .innerJoin(schema.people, eq(schema.people.id, schema.meetingParticipants.personId))
-    .where(eq(schema.meetingParticipants.meetingId, meetingId));
-  const participantNames = participantRows.map((p) => p.name ?? p.email ?? "Unknown");
-  const participants = participantNames.join(", ") || "Unknown";
+  // See processMeeting.ts's identical need — same shared helper so the two
+  // can't drift out of sync on how any of this is resolved.
+  const context = await loadMeetingContext(meetingId);
+  if (!context) return null;
+  const { meeting, transcript, owner, participantNames, participants } = context;
 
   const fresh = await extractInsights({
     topic: meeting.topic,

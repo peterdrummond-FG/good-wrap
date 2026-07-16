@@ -24,7 +24,7 @@
 // needed — not before.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { requireEnv } from "../util/env";
+import { getClaudeClient, getClaudeModel, getToolUseInput } from "../util/claude";
 import { withRetry } from "../util/retry";
 import type { ActionItem, FollowUpItem, SuggestionItem } from "../../db/schema";
 
@@ -206,14 +206,6 @@ const SYSTEM_PROMPT =
   "requested 5-8 for each even if some entries end up more marginal than others; " +
   "under-generating is worse than over-generating for these two categories (not for takeaways).";
 
-let client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!client) {
-    client = new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY") });
-  }
-  return client;
-}
-
 // Forced tool-use is supposed to guarantee the declared shape, but it's not
 // a hard guarantee — hit live (2026-07-16) where Claude returned a field as
 // something other than an array, and `?? []` only guards against
@@ -240,7 +232,7 @@ const MAX_UNDERGENERATION_ATTEMPTS = 3;
 async function callExtraction(input: ExtractInsightsInput, model: string): Promise<ExtractInsightsResult> {
   return withRetry(
     async () => {
-      const message = await getClient().messages.create({
+      const message = await getClaudeClient().messages.create({
         model,
         max_tokens: 2048,
         system: SYSTEM_PROMPT,
@@ -262,14 +254,7 @@ async function callExtraction(input: ExtractInsightsInput, model: string): Promi
         ],
       });
 
-      const toolUse = message.content.find(
-        (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
-      );
-      if (!toolUse) {
-        throw new Error("Claude did not return a tool_use block for record_meeting_notes.");
-      }
-
-      const result = toolUse.input as RawExtractionResult;
+      const result = getToolUseInput(message, "record_meeting_notes") as RawExtractionResult;
       return {
         keywords: toArray<string>(result.keywords, "keywords"),
         takeaways: toArray<string>(result.takeaways, "takeaways").map((text) => ({ text, approved: true })),
@@ -297,7 +282,7 @@ async function callExtraction(input: ExtractInsightsInput, model: string): Promi
  * and by regenerateCategory.ts (which discards whichever categories it
  * didn't ask for — a trivial cost at personal scale). */
 export async function extractInsights(input: ExtractInsightsInput): Promise<ExtractInsightsResult> {
-  const model = process.env.CLAUDE_MODEL || "claude-sonnet-5";
+  const model = getClaudeModel();
 
   let result = await callExtraction(input, model);
   for (

@@ -52,6 +52,18 @@ export function buildApp() {
     .filter(Boolean);
   app.register(cors, { origin: [...defaultOrigins, ...extraOrigins] });
 
+  // Every route below threw its own error straight to a per-route try/catch
+  // that logged it and replied 400 with the error's message — identical
+  // boilerplate repeated at every call site. Centralized here: a route
+  // handler can now just throw (or let an awaited call reject) and this
+  // catches it uniformly. Explicit reply.code(404)/(400) calls for expected
+  // "not found"/"bad input" cases are unaffected — those return directly and
+  // never reach this handler.
+  app.setErrorHandler((err, req, reply) => {
+    req.log.error(err);
+    reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+  });
+
   // Added 2026-07-16 — not auth (this stays a no-auth personal POC), just a
   // way to make the existing implicit "current user" assumption
   // (DEFAULT_OWNER_EMAIL, see queries.ts's getCurrentUser) visible in the UI
@@ -88,13 +100,7 @@ export function buildApp() {
   });
 
   app.post<{ Body: CaptureManualMeetingInput }>("/api/meetings", async (req, reply) => {
-    let result;
-    try {
-      result = await captureManualMeeting(req.body);
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
-    }
+    const result = await captureManualMeeting(req.body);
 
     // Auto-process right after capture — Peter's call: a meeting shouldn't
     // need a manual "Process this meeting" click before it's useful, and this
@@ -122,17 +128,12 @@ export function buildApp() {
   app.patch<{ Params: { id: string }; Body: UpdateMeetingInput }>(
     "/api/meetings/:id",
     async (req, reply) => {
-      try {
-        const found = await updateMeeting(req.params.id, req.body ?? {});
-        if (!found) {
-          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
-        }
-        const meeting = await getMeetingDetail(req.params.id);
-        return reply.send({ meeting });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      const found = await updateMeeting(req.params.id, req.body ?? {});
+      if (!found) {
+        return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
       }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ meeting });
     }
   );
 
@@ -144,17 +145,12 @@ export function buildApp() {
   app.patch<{ Params: { id: string }; Body: UpdateMeetingInsightsInput }>(
     "/api/meetings/:id/insights",
     async (req, reply) => {
-      try {
-        const { found } = await updateMeetingInsights(req.params.id, req.body ?? {});
-        if (!found) {
-          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
-        }
-        const meeting = await getMeetingDetail(req.params.id);
-        return reply.send({ meeting });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      const { found } = await updateMeetingInsights(req.params.id, req.body ?? {});
+      if (!found) {
+        return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
       }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ meeting });
     }
   );
 
@@ -166,31 +162,21 @@ export function buildApp() {
   app.post<{ Params: { id: string }; Body: ReviewMeetingInput }>(
     "/api/meetings/:id/review",
     async (req, reply) => {
-      try {
-        const result = await submitMeetingReview(req.params.id, req.body);
-        if (!result) {
-          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
-        }
-        const meeting = await getMeetingDetail(req.params.id);
-        return reply.send({ ...result, meeting });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      const result = await submitMeetingReview(req.params.id, req.body);
+      if (!result) {
+        return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
       }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ ...result, meeting });
     }
   );
 
   app.delete<{ Params: { id: string } }>("/api/meetings/:id", async (req, reply) => {
-    try {
-      const found = await deleteMeeting(req.params.id);
-      if (!found) {
-        return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
-      }
-      return reply.code(204).send();
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    const found = await deleteMeeting(req.params.id);
+    if (!found) {
+      return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
     }
+    return reply.code(204).send();
   });
 
   // Regenerates ONE category (takeaways/actionItems/followUps) via a fresh
@@ -207,33 +193,23 @@ export function buildApp() {
           .code(400)
           .send({ error: `category must be one of takeaways/actionItems/followUps, got: ${category}` });
       }
-      try {
-        const meeting = await regenerateInsightCategory(req.params.id, category);
-        if (!meeting) {
-          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
-        }
-        return reply.send({ meeting });
-      } catch (err) {
-        req.log.error(err);
-        return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+      const meeting = await regenerateInsightCategory(req.params.id, category);
+      if (!meeting) {
+        return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
       }
+      return reply.send({ meeting });
     }
   );
 
   app.post<{ Params: { id: string } }>("/api/meetings/:id/process", async (req, reply) => {
-    try {
-      // Lower embedding batch size for this manual reprocess path only —
-      // this route is what the dashboard's "Reprocess meeting" button calls
-      // (capture-time auto-processing goes through a separate call site
-      // below, and keeps the default batch size). Needed because the
-      // backend runs on a memory-capped Railway plan that OOM-killed the
-      // container at the default batch size of 32 during a real reprocess.
-      const result = await runFullPipeline(req.params.id, { embedBatchSize: 8 });
-      return reply.send(result);
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
-    }
+    // Lower embedding batch size for this manual reprocess path only — this
+    // route is what the dashboard's "Reprocess meeting" button calls
+    // (capture-time auto-processing goes through a separate call site above,
+    // and keeps the default batch size). Needed because the backend runs on
+    // a memory-capped Railway plan that OOM-killed the container at the
+    // default batch size of 32 during a real reprocess.
+    const result = await runFullPipeline(req.params.id, { embedBatchSize: 8 });
+    return reply.send(result);
   });
 
   app.post<{ Body: { question?: string } }>("/api/ask", async (req, reply) => {
@@ -241,13 +217,8 @@ export function buildApp() {
     if (!question) {
       return reply.code(400).send({ error: "question is required" });
     }
-    try {
-      const result = await askQuestion(question);
-      return reply.send(result);
-    } catch (err) {
-      req.log.error(err);
-      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
-    }
+    const result = await askQuestion(question);
+    return reply.send(result);
   });
 
   return app;

@@ -8,7 +8,7 @@
 //   npm run pipeline -- <meetingId>
 
 import { runFullPipeline } from "./runFullPipeline";
-import { closeDb } from "../db/client";
+import { runCli } from "../util/runCli";
 
 async function main() {
   const meetingId = process.argv[2];
@@ -24,12 +24,4 @@ async function main() {
   console.log("Suggestions generated — review and approve on the dashboard to trigger notifications.");
 }
 
-main()
-  .catch((err) => {
-    console.error("Pipeline failed:", err.message ?? err);
-    if (err.cause) console.error("Caused by:", err.cause.message ?? err.cause);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closeDb();
-  });
+runCli("Pipeline", main);

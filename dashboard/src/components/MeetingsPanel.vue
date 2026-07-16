@@ -41,38 +41,15 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { fetchMeetings, type MeetingListItem, type ReviewStatus } from "../api";
+import { fetchMeetings, type MeetingListItem } from "../api";
+import { formatMeetingDateTime as formatDate } from "../formatDate";
+import { reviewStatusListLabel as pillLabel, reviewStatusPillClass as pillClass } from "../reviewStatus";
+import { useAsyncList } from "../composables/useAsyncList";
 import PersonTag from "./PersonTag.vue";
 
-const meetings = ref<MeetingListItem[]>([]);
-const loading = ref(true);
-const error = ref("");
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-function pillLabel(status: ReviewStatus): string {
-  return { pending: "Pending", needs_review: "Needs review", reviewed: "Reviewed" }[status];
-}
-
-function pillClass(status: ReviewStatus): string {
-  return {
-    pending: "bw-pill--pending",
-    needs_review: "bw-pill--needs-review",
-    reviewed: "bw-pill--processed",
-  }[status];
-}
-
-onMounted(async () => {
-  try {
-    const result = await fetchMeetings();
-    meetings.value = result.meetings;
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    loading.value = false;
-  }
-});
+const {
+  data: meetings,
+  loading,
+  error,
+} = useAsyncList(async () => (await fetchMeetings()).meetings, [] as MeetingListItem[]);
 </script>

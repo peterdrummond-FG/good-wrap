@@ -4,7 +4,7 @@
 //   npm run process -- <meetingId>
 
 import { processMeeting } from "./processMeeting";
-import { closeDb } from "../db/client";
+import { runCli } from "../util/runCli";
 
 async function main() {
   const meetingId = process.argv[2];
@@ -20,12 +20,4 @@ async function main() {
   console.log(`  chunks:      ${result.chunkCount}`);
 }
 
-main()
-  .catch((err) => {
-    console.error("Processing failed:", err.message ?? err);
-    if (err.cause) console.error("Caused by:", err.cause.message ?? err.cause);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closeDb();
-  });
+runCli("Processing", main);

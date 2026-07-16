@@ -17,7 +17,7 @@ import { db, schema } from "../db/client";
 import { extractInsights } from "./extractInsights";
 import { embedChunks } from "./embedChunks";
 import { chunkTranscript } from "./chunkText";
-import { getMeetingOwner } from "../server/queries";
+import { loadMeetingContext } from "./meetingContext";
 
 export interface ProcessMeetingResult {
   meetingId: string;
@@ -36,43 +36,15 @@ export async function processMeeting(
   meetingId: string,
   options: ProcessMeetingOptions = {}
 ): Promise<ProcessMeetingResult> {
-  const [meeting] = await db
-    .select()
-    .from(schema.meetings)
-    .where(eq(schema.meetings.id, meetingId))
-    .limit(1);
-  if (!meeting) {
+  // Loads the meeting, its transcript, its resolved owner, and participant
+  // names/display string — shared with regenerateCategory.ts (see
+  // meetingContext.ts) so the two can't drift out of sync on how any of
+  // this is resolved.
+  const context = await loadMeetingContext(meetingId);
+  if (!context) {
     throw new Error(`No meeting found for id ${meetingId}`);
   }
-
-  // Needed so extractInsights can tell Claude which participant name is the
-  // meeting owner (see that module's comment — without this, the owner's
-  // own tasks get misfiled as follow-ups instead of action items). Goes
-  // through the shared getMeetingOwner helper (see queries.ts) rather than
-  // a local owner_id->users join, so this and regenerateCategory.ts can't
-  // drift out of sync on how "the owner" is resolved.
-  const owner = await getMeetingOwner(meetingId);
-  if (!owner) {
-    throw new Error(`No owner found for meeting ${meetingId}`);
-  }
-
-  const [transcript] = await db
-    .select()
-    .from(schema.transcripts)
-    .where(eq(schema.transcripts.meetingId, meetingId))
-    .limit(1);
-  if (!transcript) {
-    throw new Error(`No transcript found for meeting ${meetingId}`);
-  }
-
-  const participantRows = await db
-    .select({ name: schema.people.name, email: schema.people.email })
-    .from(schema.meetingParticipants)
-    .innerJoin(schema.people, eq(schema.people.id, schema.meetingParticipants.personId))
-    .where(eq(schema.meetingParticipants.meetingId, meetingId));
-
-  const participantNames = participantRows.map((p) => p.name ?? p.email ?? "Unknown");
-  const participants = participantNames.join(", ") || "Unknown";
+  const { meeting, transcript, owner, participantNames, participants } = context;
 
   // Slow network calls happen outside the DB transaction below — no reason
   // to hold a transaction open while waiting on Claude/Voyage.

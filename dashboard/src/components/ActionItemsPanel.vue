@@ -49,13 +49,17 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
 import { Notify } from "quasar";
 import { fetchFollowUps, type ActionItemWithMeeting } from "../api";
+import { useAsyncList } from "../composables/useAsyncList";
 
-const actionItems = ref<ActionItemWithMeeting[]>([]);
-const loading = ref(true);
-const error = ref("");
+// Same endpoint as the Follow-ups panel (it returns both lists together) —
+// just picks the other half of the response.
+const {
+  data: actionItems,
+  loading,
+  error,
+} = useAsyncList(async () => (await fetchFollowUps()).actionItems, [] as ActionItemWithMeeting[]);
 
 async function copyItem(text: string) {
   try {
@@ -65,17 +69,4 @@ async function copyItem(text: string) {
     Notify.create({ type: "negative", message: "Couldn't copy — clipboard access denied", timeout: 2500 });
   }
 }
-
-onMounted(async () => {
-  try {
-    // Same endpoint as the Follow-ups panel (it returns both lists together)
-    // — just picks the other half of the response.
-    const result = await fetchFollowUps();
-    actionItems.value = result.actionItems;
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    loading.value = false;
-  }
-});
 </script>
