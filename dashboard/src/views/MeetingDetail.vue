@@ -150,7 +150,14 @@
                           <q-checkbox v-model="a.approved" dense />
                         </q-item-section>
                         <q-item-section>
-                          <q-input v-model="a.text" dense borderless input-class="text-body2" />
+                          <q-input
+                            v-model="a.text"
+                            type="textarea"
+                            autogrow
+                            dense
+                            borderless
+                            input-class="text-body2"
+                          />
                         </q-item-section>
                       </q-item>
                       <q-item v-if="!reviewActionItems.length" dense>
@@ -244,7 +251,14 @@
                           <q-checkbox v-model="f.approved" dense />
                         </q-item-section>
                         <q-item-section>
-                          <q-input v-model="f.text" dense borderless input-class="text-body2" />
+                          <q-input
+                            v-model="f.text"
+                            type="textarea"
+                            autogrow
+                            dense
+                            borderless
+                            input-class="text-body2"
+                          />
                           <div class="row items-center q-gutter-x-sm">
                             <q-select
                               v-model="f.person"
