@@ -14,9 +14,12 @@ import {
   deleteMeeting,
   getCurrentUser,
   getMeetingDetail,
+  getPersonDetail,
   listActionItems,
   listFollowUps,
   listMeetings,
+  listPeople,
+  sendActionItemToAsana,
   updateMeeting,
   updateMeetingInsights,
   type UpdateMeetingInput,
@@ -27,6 +30,7 @@ import { runFullPipeline } from "../pipeline/runFullPipeline";
 import { submitMeetingReview, type ReviewMeetingInput } from "../pipeline/reviewMeeting";
 import { regenerateInsightCategory, type RegenerateCategory } from "../pipeline/regenerateCategory";
 import { askQuestion } from "../qa/askQuestion";
+import { summarizePersonHistory } from "../qa/personSummary";
 
 export function buildApp() {
   const app = Fastify({ logger: true });
@@ -201,6 +205,30 @@ export function buildApp() {
     }
   );
 
+  // Pushes one approved Action Item to Asana (manual "Send to Asana" button
+  // on the meeting detail page — Action Items only, never Follow-ups, see
+  // src/integrations/asana.ts). Re-calling for an already-sent item is a
+  // no-op (returns the existing task instead of creating a duplicate).
+  app.post<{ Params: { id: string; index: string } }>(
+    "/api/meetings/:id/action-items/:index/send-to-asana",
+    async (req, reply) => {
+      const index = Number(req.params.index);
+      if (!Number.isInteger(index) || index < 0) {
+        return reply
+          .code(400)
+          .send({ error: `index must be a non-negative integer, got: ${req.params.index}` });
+      }
+      const result = await sendActionItemToAsana(req.params.id, index);
+      if (!result) {
+        return reply
+          .code(404)
+          .send({ error: `No action item found at index ${index} for meeting ${req.params.id}` });
+      }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ ...result, meeting });
+    }
+  );
+
   app.post<{ Params: { id: string } }>("/api/meetings/:id/process", async (req, reply) => {
     // Lower embedding batch size for this manual reprocess path only — this
     // route is what the dashboard's "Reprocess meeting" button calls
@@ -218,6 +246,32 @@ export function buildApp() {
       return reply.code(400).send({ error: "question is required" });
     }
     const result = await askQuestion(question);
+    return reply.send(result);
+  });
+
+  // Manual "Person" page (#9) — on-demand meeting prep, no calendar
+  // integration. See queries.ts's listPeople/getPersonDetail and
+  // qa/personSummary.ts.
+  app.get("/api/people", async (_req, reply) => {
+    const people = await listPeople();
+    return reply.send({ people });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/people/:id", async (req, reply) => {
+    const person = await getPersonDetail(req.params.id);
+    if (!person) {
+      return reply.code(404).send({ error: `No person found for id ${req.params.id}` });
+    }
+    return reply.send({ person });
+  });
+
+  // Triggers a real Claude call — never run automatically, only from the
+  // person page's explicit "Generate summary" button.
+  app.post<{ Params: { id: string } }>("/api/people/:id/summary", async (req, reply) => {
+    const result = await summarizePersonHistory(req.params.id);
+    if (!result) {
+      return reply.code(404).send({ error: `No person found for id ${req.params.id}` });
+    }
     return reply.send(result);
   });
 

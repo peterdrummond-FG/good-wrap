@@ -224,6 +224,10 @@ export interface ActionItem {
   text: string;
   urgency: Urgency;
   approved: boolean;
+  // Set once this item's been pushed to Asana (src/integrations/asana.ts,
+  // added 2026-07-16) — the created task's gid, so the "Send to Asana"
+  // button becomes a no-op re-send instead of creating a duplicate task.
+  asanaTaskGid?: string;
 }
 
 // Follow-ups: things waiting on someone else, or unconfirmed items to revisit.

@@ -5,6 +5,7 @@ import { desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/client";
 import type { ActionItem, FollowUpItem, SuggestionItem, Urgency } from "../../db/schema";
 import { resolveParticipantIds, type CaptureParticipantInput } from "../ingest/captureManualMeeting";
+import { createAsanaTask } from "../integrations/asana";
 
 // Three-state status the dashboard badges key off (added 2026-07-16 with the
 // suggest-then-approve workflow — see db/schema.ts's meeting_insights comment).
@@ -67,6 +68,7 @@ export function normalizeActionItems(raw: unknown): ActionItem[] {
         text: String(obj?.text ?? ""),
         urgency: normalizeUrgency(obj?.urgency),
         approved: Boolean(obj?.approved),
+        asanaTaskGid: typeof obj?.asanaTaskGid === "string" ? obj.asanaTaskGid : undefined,
       };
     })
     .filter((a) => a.text.trim());
@@ -157,6 +159,10 @@ export interface MeetingListItem {
   // opening each meeting. Empty until reviewed (raw unapproved suggestions
   // aren't shown here — they aren't confirmed real takeaways yet).
   topTakeaways: string[];
+  // Keywords are fully automatic (no approval step — see extractInsights.ts),
+  // so unlike takeaways these are shown as-is. Added so the Meetings list can
+  // search on them, not just the topic text.
+  keywords: string[];
 }
 
 export async function listMeetings(): Promise<MeetingListItem[]> {
@@ -188,6 +194,7 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
   const insightRows = await db
     .select({
       meetingId: schema.meetingInsights.meetingId,
+      keywords: schema.meetingInsights.keywords,
       takeaways: schema.meetingInsights.takeaways,
       actionItemsReviewedAt: schema.meetingInsights.actionItemsReviewedAt,
       followUpsReviewedAt: schema.meetingInsights.followUpsReviewedAt,
@@ -197,6 +204,7 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
 
   const reviewStatusByMeeting = new Map<string, ReviewStatus>();
   const takeawaysByMeeting = new Map<string, string[]>();
+  const keywordsByMeeting = new Map<string, string[]>();
   for (const row of insightRows) {
     reviewStatusByMeeting.set(
       row.meetingId,
@@ -206,6 +214,7 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
       .filter((t) => t.approved)
       .map((t) => t.text);
     takeawaysByMeeting.set(row.meetingId, approved.slice(0, 3));
+    keywordsByMeeting.set(row.meetingId, row.keywords ?? []);
   }
 
   const participantsByMeeting = new Map<string, string[]>();
@@ -221,6 +230,7 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
     participants: participantsByMeeting.get(m.id) ?? [],
     reviewStatus: reviewStatusByMeeting.get(m.id) ?? "pending",
     topTakeaways: takeawaysByMeeting.get(m.id) ?? [],
+    keywords: keywordsByMeeting.get(m.id) ?? [],
   }));
 }
 
@@ -600,4 +610,181 @@ export async function deleteMeeting(meetingId: string): Promise<boolean> {
 
     return true;
   });
+}
+
+// --- Asana push (Action Items only — see src/integrations/asana.ts) --------------
+
+export interface SendActionItemToAsanaResult {
+  taskGid: string;
+  /** True if this item already had a task (no new task was created). */
+  alreadySent: boolean;
+}
+
+/**
+ * Pushes one Action Item to Asana and records the created task's gid on
+ * that item, so a later call for the same index is a no-op instead of
+ * creating a duplicate task. `index` is the item's position in the meeting's
+ * current actionItems array (same convention the review UI already uses).
+ *
+ * Returns null if the meeting/insights don't exist, or index is out of range
+ * (caller should 404 either way).
+ */
+export async function sendActionItemToAsana(
+  meetingId: string,
+  index: number
+): Promise<SendActionItemToAsanaResult | null> {
+  const [meeting] = await db
+    .select({ topic: schema.meetings.topic })
+    .from(schema.meetings)
+    .where(eq(schema.meetings.id, meetingId))
+    .limit(1);
+  if (!meeting) return null;
+
+  const [existingInsights] = await db
+    .select({ id: schema.meetingInsights.id, actionItems: schema.meetingInsights.actionItems })
+    .from(schema.meetingInsights)
+    .where(eq(schema.meetingInsights.meetingId, meetingId))
+    .orderBy(desc(schema.meetingInsights.generatedAt))
+    .limit(1);
+  if (!existingInsights) return null;
+
+  const actionItems = normalizeActionItems(existingInsights.actionItems);
+  const item = actionItems[index];
+  if (!item) return null;
+
+  if (item.asanaTaskGid) {
+    return { taskGid: item.asanaTaskGid, alreadySent: true };
+  }
+
+  const { taskGid } = await createAsanaTask({ text: item.text, meetingTopic: meeting.topic });
+  actionItems[index] = { ...item, asanaTaskGid: taskGid };
+
+  await db
+    .update(schema.meetingInsights)
+    .set({ actionItems })
+    .where(eq(schema.meetingInsights.id, existingInsights.id));
+
+  return { taskGid, alreadySent: false };
+}
+
+// --- Manual person-history page (#9, 2026-07-16) ----------------------------------
+// On-demand only — no calendar integration (see personSummary.ts's header
+// comment). Powers a "People" picker + a per-person detail page showing past
+// meetings and follow-ups involving them.
+
+export interface PersonListItem {
+  id: string;
+  name: string;
+}
+
+/** Every person who's attended at least one meeting. */
+export async function listPeople(): Promise<PersonListItem[]> {
+  const rows = await db
+    .select({ id: schema.people.id, name: schema.people.name, email: schema.people.email })
+    .from(schema.people)
+    .innerJoin(schema.meetingParticipants, eq(schema.meetingParticipants.personId, schema.people.id));
+
+  const byId = new Map<string, PersonListItem>();
+  for (const row of rows) {
+    byId.set(row.id, { id: row.id, name: row.name ?? row.email ?? "Unknown" });
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export interface PersonMeetingSummary {
+  meetingId: string;
+  topic: string;
+  startTime: Date;
+  reviewStatus: ReviewStatus;
+}
+
+export interface PersonFollowUp extends FollowUpItem {
+  meetingId: string;
+  meetingTopic: string;
+  meetingStartTime: Date;
+}
+
+export interface PersonDetail {
+  id: string;
+  name: string;
+  meetings: PersonMeetingSummary[];
+  // Approved follow-ups attributed to this person — matched by display name,
+  // same linkage the rest of the dashboard uses for "person" (see
+  // PersonTag.vue's comment: it's a plain name string, not a people.id FK).
+  // There's no "done"/completed concept yet, so this is every approved
+  // follow-up involving them, not just ones still outstanding.
+  followUps: PersonFollowUp[];
+}
+
+/** Returns null if no person exists with this id (caller should 404). */
+export async function getPersonDetail(personId: string): Promise<PersonDetail | null> {
+  const [person] = await db
+    .select({ id: schema.people.id, name: schema.people.name, email: schema.people.email })
+    .from(schema.people)
+    .where(eq(schema.people.id, personId))
+    .limit(1);
+  if (!person) return null;
+
+  const name = person.name ?? person.email ?? "Unknown";
+
+  const participantRows = await db
+    .select({ meetingId: schema.meetingParticipants.meetingId })
+    .from(schema.meetingParticipants)
+    .where(eq(schema.meetingParticipants.personId, personId));
+  const meetingIds = participantRows.map((row) => row.meetingId);
+
+  if (meetingIds.length === 0) {
+    return { id: person.id, name, meetings: [], followUps: [] };
+  }
+
+  const meetingRows = await db
+    .select({ id: schema.meetings.id, topic: schema.meetings.topic, startTime: schema.meetings.startTime })
+    .from(schema.meetings)
+    .where(inArray(schema.meetings.id, meetingIds))
+    .orderBy(desc(schema.meetings.startTime));
+
+  const insightRows = await db
+    .select({
+      meetingId: schema.meetingInsights.meetingId,
+      followUps: schema.meetingInsights.followUps,
+      actionItemsReviewedAt: schema.meetingInsights.actionItemsReviewedAt,
+      followUpsReviewedAt: schema.meetingInsights.followUpsReviewedAt,
+    })
+    .from(schema.meetingInsights)
+    .where(inArray(schema.meetingInsights.meetingId, meetingIds));
+
+  const insightsByMeeting = new Map(insightRows.map((row) => [row.meetingId, row]));
+
+  const meetings: PersonMeetingSummary[] = meetingRows.map((m) => {
+    const insights = insightsByMeeting.get(m.id);
+    return {
+      meetingId: m.id,
+      topic: m.topic,
+      startTime: m.startTime,
+      reviewStatus: computeReviewStatus(
+        Boolean(insights),
+        insights?.actionItemsReviewedAt ?? null,
+        insights?.followUpsReviewedAt ?? null
+      ),
+    };
+  });
+
+  const meetingById = new Map(meetingRows.map((m) => [m.id, m]));
+  const followUps: PersonFollowUp[] = [];
+  for (const row of insightRows) {
+    const meeting = meetingById.get(row.meetingId);
+    if (!meeting) continue;
+    for (const f of normalizeFollowUps(row.followUps)) {
+      if (!f.approved || f.person !== name) continue;
+      followUps.push({
+        ...f,
+        meetingId: meeting.id,
+        meetingTopic: meeting.topic,
+        meetingStartTime: meeting.startTime,
+      });
+    }
+  }
+  followUps.sort((a, b) => b.meetingStartTime.getTime() - a.meetingStartTime.getTime());
+
+  return { id: person.id, name, meetings, followUps };
 }

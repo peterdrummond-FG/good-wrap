@@ -14,6 +14,8 @@ export interface MeetingListItem {
   reviewStatus: ReviewStatus;
   /** Top 3 APPROVED takeaways — empty until reviewed. */
   topTakeaways: string[];
+  /** Fully automatic, no approval step — used for the Meetings list search. */
+  keywords: string[];
 }
 
 // Replaced "timing" (today/tomorrow/this_week/next_week/unspecified) with
@@ -31,6 +33,8 @@ export interface ActionItem {
   text: string;
   urgency: Urgency;
   approved: boolean;
+  /** Set once pushed to Asana — see sendActionItemToAsana below. */
+  asanaTaskGid?: string;
 }
 
 // Follow-ups: things waiting on someone else, or unconfirmed items.
@@ -233,9 +237,70 @@ export function askQuestion(question: string): Promise<AskResult> {
   return request("/ask", { method: "POST", body: JSON.stringify({ question }) });
 }
 
+export interface SendActionItemToAsanaResult {
+  taskGid: string;
+  /** True if this item was already sent — no new task was created. */
+  alreadySent: boolean;
+  meeting: MeetingDetail;
+}
+
+// Manual per-item push (Action Items only — see the "Send to Asana" button
+// on the meeting detail page's approved list). `index` is the item's
+// position in the meeting's actionItems array.
+export function sendActionItemToAsana(id: string, index: number): Promise<SendActionItemToAsanaResult> {
+  return request(`/meetings/${id}/action-items/${index}/send-to-asana`, { method: "POST" });
+}
+
 export function fetchFollowUps(): Promise<{
   followUps: FollowUpWithMeeting[];
   actionItems: ActionItemWithMeeting[];
 }> {
   return request("/followups");
+}
+
+// --- Manual person-history page (#9) — on-demand, no calendar integration ---------
+
+export interface PersonListItem {
+  id: string;
+  name: string;
+}
+
+export function fetchPeople(): Promise<{ people: PersonListItem[] }> {
+  return request("/people");
+}
+
+export interface PersonMeetingSummary {
+  meetingId: string;
+  topic: string;
+  startTime: string;
+  reviewStatus: ReviewStatus;
+}
+
+export interface PersonFollowUp extends FollowUpItem {
+  meetingId: string;
+  meetingTopic: string;
+  meetingStartTime: string;
+}
+
+export interface PersonDetail {
+  id: string;
+  name: string;
+  meetings: PersonMeetingSummary[];
+  /** Every approved follow-up involving this person — no "done" concept yet, so not just outstanding ones. */
+  followUps: PersonFollowUp[];
+}
+
+export function fetchPersonDetail(id: string): Promise<{ person: PersonDetail }> {
+  return request(`/people/${id}`);
+}
+
+export interface PersonSummaryResult {
+  summary: string;
+  sources: { meetingId: string; topic: string; startTime: string }[];
+}
+
+// Triggers a real Claude call — only call this from an explicit user action
+// (e.g. a "Generate summary" button), never automatically on page load.
+export function fetchPersonSummary(id: string): Promise<PersonSummaryResult> {
+  return request(`/people/${id}/summary`, { method: "POST" });
 }

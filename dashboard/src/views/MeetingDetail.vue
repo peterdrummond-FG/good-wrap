@@ -150,7 +150,7 @@
                           <q-checkbox v-model="a.approved" dense />
                         </q-item-section>
                         <q-item-section>
-                          {{ a.text }}
+                          <q-input v-model="a.text" dense borderless input-class="text-body2" />
                         </q-item-section>
                       </q-item>
                       <q-item v-if="!reviewActionItems.length" dense>
@@ -195,8 +195,30 @@
                   <template v-else>
                     <q-scroll-area style="height: 320px">
                       <ul class="bw-bullet-list">
-                        <li v-for="(a, i) in approvedActionItems" :key="i">{{ a.text }}</li>
-                        <li v-if="!approvedActionItems.length" class="text-grey-6">(none approved)</li>
+                        <li
+                          v-for="a in approvedActionItemsWithIndex"
+                          :key="a.index"
+                          class="row items-center justify-between q-gutter-x-xs"
+                        >
+                          <span class="col">{{ a.text }}</span>
+                          <q-icon v-if="a.asanaTaskGid" name="check_circle" color="positive" size="18px">
+                            <q-tooltip>Sent to Asana</q-tooltip>
+                          </q-icon>
+                          <q-btn
+                            v-else
+                            flat
+                            round
+                            dense
+                            size="sm"
+                            icon="send"
+                            color="grey-5"
+                            :loading="sendingToAsanaIndex === a.index"
+                            @click="onSendToAsana(a.index)"
+                          >
+                            <q-tooltip>Send to Asana</q-tooltip>
+                          </q-btn>
+                        </li>
+                        <li v-if="!approvedActionItemsWithIndex.length" class="text-grey-6">(none approved)</li>
                       </ul>
                     </q-scroll-area>
                   </template>
@@ -222,12 +244,29 @@
                           <q-checkbox v-model="f.approved" dense />
                         </q-item-section>
                         <q-item-section>
-                          {{ f.text }}
-                          <div class="text-caption text-grey-7 row items-center q-gutter-x-xs">
-                            <span v-if="f.person">with <PersonTag :name="f.person" /></span>
-                            <span class="bw-pill" :class="urgencyPillClass(f.urgency)">{{
-                              urgencyLabel(f.urgency)
-                            }}</span>
+                          <q-input v-model="f.text" dense borderless input-class="text-body2" />
+                          <div class="row items-center q-gutter-x-sm">
+                            <q-select
+                              v-model="f.person"
+                              :options="meeting.participants"
+                              label="Person"
+                              dense
+                              borderless
+                              clearable
+                              options-dense
+                              style="min-width: 130px"
+                            />
+                            <q-select
+                              v-model="f.urgency"
+                              :options="URGENCY_SELECT_OPTIONS"
+                              label="Urgency"
+                              dense
+                              borderless
+                              emit-value
+                              map-options
+                              options-dense
+                              style="min-width: 110px"
+                            />
                           </div>
                         </q-item-section>
                       </q-item>
@@ -385,7 +424,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Dialog, Notify } from "quasar";
 import {
@@ -393,6 +432,7 @@ import {
   fetchMeetingDetail,
   processMeeting,
   regenerateInsightCategory,
+  sendActionItemToAsana,
   updateMeeting,
   updateMeetingInsights,
   type MeetingDetail,
@@ -407,6 +447,15 @@ import PersonTag from "../components/PersonTag.vue";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
+
+// Follow-ups' urgency is editable (Action Items stays urgency-free — Peter's
+// earlier "no ranking" call, see urgency.ts). q-select needs {label, value}
+// pairs (not plain strings) since the displayed label ("High") differs from
+// the stored value ("high") — built from urgencyLabel so the wording can't
+// drift from the read-only pill display.
+const URGENCY_SELECT_OPTIONS: { label: string; value: Urgency }[] = (
+  ["high", "medium", "low"] as Urgency[]
+).map((value) => ({ value, label: urgencyLabel(value) }));
 
 const meeting = ref<MeetingDetail | null>(null);
 const loading = ref(true);
@@ -469,7 +518,35 @@ const addActionItem = actionItemsReview.addItem;
 const actionItemsDirty = actionItemsReview.dirty;
 const savingActionItems = actionItemsReview.saving;
 const showActionItemsChecklist = actionItemsReview.showChecklist;
-const approvedActionItems = actionItemsReview.approvedItems;
+
+// Approved Action Items, with each item's real index in the underlying
+// actionItems array attached — needed so "Send to Asana" (Action Items
+// only, see api.ts's sendActionItemToAsana) can address the right item on
+// the server, since the API identifies items by position, not id.
+const approvedActionItemsWithIndex = computed(() =>
+  (meeting.value?.insights?.actionItems ?? [])
+    .map((a, index) => ({ ...a, index }))
+    .filter((a) => a.approved)
+);
+const sendingToAsanaIndex = ref<number | null>(null);
+
+async function onSendToAsana(index: number) {
+  sendingToAsanaIndex.value = index;
+  error.value = "";
+  try {
+    const result = await sendActionItemToAsana(props.id, index);
+    meeting.value = result.meeting;
+    Notify.create({
+      type: "positive",
+      message: result.alreadySent ? "Already sent to Asana" : "Sent to Asana",
+      timeout: 2500,
+    });
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    sendingToAsanaIndex.value = null;
+  }
+}
 
 const reviewFollowUps = followUpsReview.items;
 const sortedReviewFollowUps = followUpsReview.displayItems;

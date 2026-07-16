@@ -18,10 +18,15 @@
 // not part of the review workflow) so there's nothing to reset there.
 // The dashboard's pencil-triggered edit view is what lets Peter re-approve
 // the new set via that category's own Save button.
+//
+// Regenerating a category doesn't discard approvals already made in THAT
+// category, either (same fix as processMeeting.ts, CODE-AUDIT.md item #5,
+// extended here 2026-07-16) — see mergeApprovedForward.
 
 import { updateMeetingInsights, getMeetingDetail, type MeetingDetail } from "../server/queries";
 import { loadMeetingContext } from "./meetingContext";
 import { extractInsights } from "./extractInsights";
+import { mergeApprovedForward } from "./mergeApprovedForward";
 
 export type RegenerateCategory = "takeaways" | "actionItems" | "followUps";
 
@@ -35,6 +40,10 @@ export async function regenerateInsightCategory(
   if (!context) return null;
   const { meeting, transcript, owner, participantNames, participants } = context;
 
+  // Capture what's currently approved in the targeted category so it isn't
+  // lost when it's replaced below — see mergeApprovedForward.
+  const existing = await getMeetingDetail(meetingId);
+
   const fresh = await extractInsights({
     topic: meeting.topic,
     participants,
@@ -46,19 +55,23 @@ export async function regenerateInsightCategory(
 
   switch (category) {
     case "takeaways": {
+      // Auto-approved with no review step (see extractInsights.ts) — nothing
+      // to protect, always fully replaced.
       await updateMeetingInsights(meetingId, { takeaways: fresh.takeaways });
       break;
     }
     case "actionItems": {
+      const previouslyApproved = (existing?.insights?.actionItems ?? []).filter((a) => a.approved);
       await updateMeetingInsights(meetingId, {
-        actionItems: fresh.actionItems,
+        actionItems: mergeApprovedForward(previouslyApproved, fresh.actionItems),
         resetActionItemsReview: true,
       });
       break;
     }
     case "followUps": {
+      const previouslyApproved = (existing?.insights?.followUps ?? []).filter((f) => f.approved);
       await updateMeetingInsights(meetingId, {
-        followUps: fresh.followUps,
+        followUps: mergeApprovedForward(previouslyApproved, fresh.followUps),
         resetFollowUpsReview: true,
       });
       break;
