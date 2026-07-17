@@ -19,15 +19,26 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
 
 ## Steps
 
+0. Read `GOODWRAP_API_BASE_URL` and `LOCAL_WORKER_API_KEY` yourself from the
+   `.env` file (e.g. `grep '^GOODWRAP_API_BASE_URL=' .env` /
+   `grep '^LOCAL_WORKER_API_KEY=' .env`, each followed by `cut -d= -f2-`) and
+   use those literal values directly in every curl call below. Don't rely on
+   `$GOODWRAP_API_BASE_URL`/`$LOCAL_WORKER_API_KEY` already being set as
+   shell environment variables — when this skill runs headlessly via the
+   launchd job, nothing exports `.env` into that process's shell, so those
+   would be empty (`npm run scan-folder`'s own subcommands don't have this
+   problem — they load `.env` themselves via `dotenv/config`, transitively
+   imported through `src/db/client.ts`).
+
 1. Run `npm run scan-folder -- list`. This prints a JSON array of candidate
    filenames. If it's empty, say so and stop — nothing to do.
 
 2. Fetch context you'll need for insight generation, once per run (not per
-   file):
-   - `curl -s "$GOODWRAP_API_BASE_URL/api/me"` → the owner's name. Action
+   file), using the base URL from step 0:
+   - `curl -s "<GOODWRAP_API_BASE_URL>/api/me"` → the owner's name. Action
      items are THIS person's own tasks; follow-ups are never attributed to
      them.
-   - `curl -s "$GOODWRAP_API_BASE_URL/api/people"` → known contacts from past
+   - `curl -s "<GOODWRAP_API_BASE_URL>/api/people"` → known contacts from past
      meetings, for attributing a follow-up to someone mentioned but not
      present in the current meeting.
 
@@ -97,15 +108,19 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
         over-generating for these two categories (not for takeaways, which
         stays exactly 5).
 
-   c. POST the result:
+   c. POST the result (using the literal base URL and key read in step 0,
+      not shell variable references):
       ```
-      curl -s -X POST "$GOODWRAP_API_BASE_URL/api/meetings/upload-processed" \
+      curl -s -X POST "<GOODWRAP_API_BASE_URL>/api/meetings/upload-processed" \
         -H "Content-Type: application/json" \
-        -H "x-worker-key: $LOCAL_WORKER_API_KEY" \
+        -H "x-worker-key: <LOCAL_WORKER_API_KEY>" \
         -d '{"topic": "...", "startTime": "...", "durationMinutes": ..., "participants": [...], "transcript": "...", "insights": {"keywords": [...], "takeaways": [{"text": "..."}], "actionItems": [{"text": "...", "urgency": "..."}], "followUps": [{"text": "...", "person": null, "urgency": "..."}]}}'
       ```
       (`takeaways`/`actionItems`/`followUps` entries take no `approved`
-      field — the server stamps that itself.)
+      field — the server stamps that itself.) Write the JSON body to a temp
+      file first (e.g. `/tmp/upload-payload.json`) and POST with `-d
+      @/tmp/upload-payload.json` rather than inlining a large transcript
+      directly on the command line.
 
    d. On a `2xx` response: `npm run scan-folder -- finish "<filename>" processed`.
       On any failure (claim error, malformed transcript, non-2xx response):
