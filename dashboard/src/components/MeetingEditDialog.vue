@@ -24,15 +24,7 @@
           />
         </div>
 
-        <div class="q-mb-md">
-          <div class="text-subtitle2 q-mb-xs">Participants</div>
-          <div v-for="(p, i) in editParticipants" :key="i" class="row q-gutter-sm items-center q-mb-xs">
-            <q-input v-model="p.name" placeholder="Name" filled dense class="col" />
-            <q-input v-model="p.email" placeholder="Email (optional)" filled dense class="col" />
-            <q-btn flat round dense icon="close" @click="editParticipants.splice(i, 1)" />
-          </div>
-          <q-btn flat dense icon="add" label="Add participant" @click="editParticipants.push({ name: '', email: '' })" />
-        </div>
+        <ParticipantListEditor v-model="editParticipants" class="q-mb-md" />
 
         <q-separator class="q-my-md" />
 
@@ -76,6 +68,7 @@
 import { reactive, ref, watch } from "vue";
 import { Notify } from "quasar";
 import { fetchMeetingDetail, updateMeeting, updateMeetingInsights, type MeetingDetail } from "../api";
+import ParticipantListEditor from "./ParticipantListEditor.vue";
 
 const props = defineProps<{ modelValue: boolean; meeting: MeetingDetail }>();
 const emit = defineEmits<{

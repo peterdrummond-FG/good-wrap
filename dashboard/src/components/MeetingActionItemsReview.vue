@@ -54,7 +54,7 @@
         icon="autorenew"
         label="Regenerate action items"
         class="q-mt-sm full-width"
-        :loading="regenerating"
+        :loading="regeneratingKey !== null"
         @click="onRegenerate"
       />
     </template>
@@ -114,6 +114,7 @@ import {
   type MeetingDetail,
   type Urgency,
 } from "../api";
+import { useKeyedAsyncAction } from "../composables/useKeyedAsyncAction";
 import { useReviewCategory } from "../composables/useReviewCategory";
 
 const props = defineProps<{ meetingId: string; meeting: MeetingDetail }>();
@@ -156,61 +157,51 @@ const approvedActionItemsWithIndex = computed(() =>
   (props.meeting.insights?.actionItems ?? []).map((a, index) => ({ ...a, index })).filter((a) => a.approved)
 );
 
-const sendingToAsanaIndex = ref<number | null>(null);
-const togglingDoneKey = ref<string | null>(null);
-const deletingKey = ref<string | null>(null);
-const regenerating = ref(false);
-
-// These mutate actionItems from outside the review composable's own
+// One instance per button "kind" so concurrent operations on different items
+// don't share a loading key (matches the original per-kind refs). Each
+// mutates actionItems from outside the review composable's own
 // save()/resetCopy() flow (only reachable from the collapsed approved view,
 // which only renders when the checklist is closed) — resetCopy() afterward
 // keeps the working copy in sync so a later checklist Save can't silently
 // overwrite the server with stale pre-mutation data.
+const { activeKey: sendingToAsanaIndex, run: runAsanaAction } = useKeyedAsyncAction(
+  error,
+  actionItemsReview.resetCopy
+);
+const { activeKey: togglingDoneKey, run: runToggleAction } = useKeyedAsyncAction(
+  error,
+  actionItemsReview.resetCopy
+);
+const { activeKey: deletingKey, run: runDeleteAction } = useKeyedAsyncAction(error, actionItemsReview.resetCopy);
+const { activeKey: regeneratingKey, run: runRegenerateAction } = useKeyedAsyncAction(
+  error,
+  actionItemsReview.resetCopy
+);
+
 async function onSendToAsana(index: number) {
-  sendingToAsanaIndex.value = index;
-  error.value = "";
-  try {
+  await runAsanaAction(index, async () => {
     const result = await sendActionItemToAsana(props.meetingId, index);
     emit("update:meeting", result.meeting);
-    actionItemsReview.resetCopy();
     Notify.create({
       type: "positive",
       message: result.alreadySent ? "Already sent to Asana" : "Sent to Asana",
       timeout: 2500,
     });
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    sendingToAsanaIndex.value = null;
-  }
+  });
 }
 
 async function onToggleActionItemDone(index: number, done: boolean) {
-  togglingDoneKey.value = `action-${index}`;
-  error.value = "";
-  try {
+  await runToggleAction(`action-${index}`, async () => {
     const result = await setActionItemDone(props.meetingId, index, done);
     emit("update:meeting", result.meeting);
-    actionItemsReview.resetCopy();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    togglingDoneKey.value = null;
-  }
+  });
 }
 
 async function onDeleteActionItem(index: number) {
-  deletingKey.value = `action-${index}`;
-  error.value = "";
-  try {
+  await runDeleteAction(`action-${index}`, async () => {
     const result = await deleteActionItem(props.meetingId, index);
     emit("update:meeting", result.meeting);
-    actionItemsReview.resetCopy();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    deletingKey.value = null;
-  }
+  });
 }
 
 async function onSaveActionItems() {
@@ -228,18 +219,11 @@ async function onSaveActionItems() {
 }
 
 async function onRegenerate() {
-  regenerating.value = true;
-  error.value = "";
-  try {
+  await runRegenerateAction("regenerate", async () => {
     const result = await regenerateInsightCategory(props.meetingId, "actionItems");
     emit("update:meeting", result.meeting);
-    actionItemsReview.resetCopy();
     Notify.create({ type: "positive", message: "Action items regenerated", timeout: 3000 });
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    regenerating.value = false;
-  }
+  });
 }
 
 // This component is keyed by meetingId in MeetingsView.vue (destroyed and

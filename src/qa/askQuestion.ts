@@ -2,56 +2,14 @@
 //
 // Embeds the question with the same local model used for transcript chunks
 // (asymmetric passage/query embeddings — see pipeline/embedChunks.ts),
-// retrieves the closest transcript_chunks via pgvector cosine distance, and
-// hands the matched excerpts to Claude to answer, citing which meeting(s) it
-// actually drew from (not just whichever chunks happened to be nearby).
+// retrieves the closest transcript_chunks via pgvector cosine distance (see
+// retrieveChunks.ts, shared with personSummary.ts), and hands the matched
+// excerpts to Claude to answer, citing which meeting(s) it actually drew from
+// (not just whichever chunks happened to be nearby).
 
 import Anthropic from "@anthropic-ai/sdk";
-import { sql } from "drizzle-orm";
-import { db } from "../db/client";
-import { embedQuery } from "../pipeline/embedChunks";
-import { getClaudeClient, getClaudeModel, getToolUseInput } from "../util/claude";
-
-const TOP_K = 8;
-
-interface RetrievedChunk {
-  chunkText: string;
-  meetingId: string;
-  topic: string;
-  startTime: Date;
-  distance: number;
-}
-
-async function retrieveChunks(question: string): Promise<RetrievedChunk[]> {
-  const queryEmbedding = await embedQuery(question);
-  const embeddingLiteral = `[${queryEmbedding.join(",")}]`;
-
-  // Raw SQL: Drizzle's query builder doesn't have a pgvector `<=>` (cosine
-  // distance) helper, so this uses `db.execute` directly. embeddingLiteral is
-  // built entirely from our own numeric array (never user text), and is
-  // passed as a bound parameter here, not interpolated into the SQL string.
-  const rows = (await db.execute(sql`
-    select
-      tc.chunk_text as chunk_text,
-      t.meeting_id as meeting_id,
-      m.topic as topic,
-      m.start_time as start_time,
-      tc.embedding <=> ${embeddingLiteral}::vector as distance
-    from transcript_chunks tc
-    join transcripts t on t.id = tc.transcript_id
-    join meetings m on m.id = t.meeting_id
-    order by distance asc
-    limit ${TOP_K}
-  `)) as unknown as Record<string, unknown>[];
-
-  return rows.map((row) => ({
-    chunkText: row.chunk_text as string,
-    meetingId: row.meeting_id as string,
-    topic: row.topic as string,
-    startTime: new Date(row.start_time as string),
-    distance: Number(row.distance),
-  }));
-}
+import { callToolOnce } from "../util/claude";
+import { buildCitedSources, formatExcerpts, retrieveChunks } from "./retrieveChunks";
 
 export interface AskQuestionResult {
   answer: string;
@@ -95,45 +53,13 @@ export async function askQuestion(question: string): Promise<AskQuestionResult> 
     };
   }
 
-  const excerptsText = chunks
-    .map(
-      (c, i) =>
-        `[${i}] meeting_id: ${c.meetingId} | "${c.topic}" (${c.startTime.toISOString()})\n${c.chunkText}`
-    )
-    .join("\n\n---\n\n");
-
-  const model = getClaudeModel();
-
-  const message = await getClaudeClient().messages.create({
-    model,
-    max_tokens: 1024,
-    system:
-      "You answer questions using only the provided meeting excerpts. Don't use outside " +
+  const result = await callToolOnce<{ answer: string; citedMeetingIds?: string[] }>(
+    "You answer questions using only the provided meeting excerpts. Don't use outside " +
       "knowledge or invent details not present in the excerpts. If the excerpts don't answer " +
       "the question, say so plainly.",
-    tools: [ANSWER_TOOL],
-    tool_choice: { type: "tool", name: "record_answer" },
-    messages: [
-      {
-        role: "user",
-        content: `Question: ${question}\n\nMeeting excerpts:\n\n${excerptsText}`,
-      },
-    ],
-  });
+    ANSWER_TOOL,
+    `Question: ${question}\n\nMeeting excerpts:\n\n${formatExcerpts(chunks)}`
+  );
 
-  const result = getToolUseInput(message, "record_answer") as {
-    answer: string;
-    citedMeetingIds?: string[];
-  };
-  const citedIds = new Set(result.citedMeetingIds ?? []);
-
-  const seenMeetingIds = new Set<string>();
-  const sources: AskQuestionResult["sources"] = [];
-  for (const c of chunks) {
-    if (!citedIds.has(c.meetingId) || seenMeetingIds.has(c.meetingId)) continue;
-    seenMeetingIds.add(c.meetingId);
-    sources.push({ meetingId: c.meetingId, topic: c.topic, startTime: c.startTime });
-  }
-
-  return { answer: result.answer, sources };
+  return { answer: result.answer, sources: buildCitedSources(chunks, result.citedMeetingIds) };
 }

@@ -212,9 +212,9 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
       row.meetingId,
       computeReviewStatus(true, row.actionItemsReviewedAt, row.followUpsReviewedAt)
     );
-    const approved = normalizeTakeaways(row.takeaways)
-      .filter((t) => t.approved)
-      .map((t) => t.text);
+    // normalizeTakeaways always returns approved:true items now (takeaways
+    // are auto-approved, not reviewed), so no filter is needed here.
+    const approved = normalizeTakeaways(row.takeaways).map((t) => t.text);
     takeawaysByMeeting.set(row.meetingId, approved.slice(0, 3));
     keywordsByMeeting.set(row.meetingId, row.keywords ?? []);
   }

@@ -77,7 +77,7 @@
         icon="autorenew"
         label="Regenerate follow-ups"
         class="q-mt-sm full-width"
-        :loading="regenerating"
+        :loading="regeneratingKey !== null"
         @click="onRegenerate"
       />
     </template>
@@ -131,6 +131,7 @@ import {
   type Urgency,
 } from "../api";
 import { sortByUrgency, urgencyLabel, urgencyPillClass } from "../urgency";
+import { useKeyedAsyncAction } from "../composables/useKeyedAsyncAction";
 import { useReviewCategory } from "../composables/useReviewCategory";
 import PersonTag from "./PersonTag.vue";
 
@@ -203,36 +204,30 @@ const approvedFollowUpsWithIndex = computed(() => {
   return sortByUrgency(withIndex);
 });
 
-const togglingDoneKey = ref<string | null>(null);
-const deletingKey = ref<string | null>(null);
-const regenerating = ref(false);
+// One instance per button "kind" so concurrent operations on different items
+// don't share a loading key (matches the original per-kind refs).
+const { activeKey: togglingDoneKey, run: runToggleAction } = useKeyedAsyncAction(
+  error,
+  followUpsReview.resetCopy
+);
+const { activeKey: deletingKey, run: runDeleteAction } = useKeyedAsyncAction(error, followUpsReview.resetCopy);
+const { activeKey: regeneratingKey, run: runRegenerateAction } = useKeyedAsyncAction(
+  error,
+  followUpsReview.resetCopy
+);
 
 async function onToggleFollowUpDone(index: number, done: boolean) {
-  togglingDoneKey.value = `followup-${index}`;
-  error.value = "";
-  try {
+  await runToggleAction(`followup-${index}`, async () => {
     const result = await setFollowUpDone(props.meetingId, index, done);
     emit("update:meeting", result.meeting);
-    followUpsReview.resetCopy();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    togglingDoneKey.value = null;
-  }
+  });
 }
 
 async function onDeleteFollowUp(index: number) {
-  deletingKey.value = `followup-${index}`;
-  error.value = "";
-  try {
+  await runDeleteAction(`followup-${index}`, async () => {
     const result = await deleteFollowUp(props.meetingId, index);
     emit("update:meeting", result.meeting);
-    followUpsReview.resetCopy();
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    deletingKey.value = null;
-  }
+  });
 }
 
 async function onSaveFollowUps() {
@@ -250,18 +245,11 @@ async function onSaveFollowUps() {
 }
 
 async function onRegenerate() {
-  regenerating.value = true;
-  error.value = "";
-  try {
+  await runRegenerateAction("regenerate", async () => {
     const result = await regenerateInsightCategory(props.meetingId, "followUps");
     emit("update:meeting", result.meeting);
-    followUpsReview.resetCopy();
     Notify.create({ type: "positive", message: "Follow-ups regenerated", timeout: 3000 });
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    regenerating.value = false;
-  }
+  });
 }
 
 // Keyed by meetingId in MeetingsView.vue — see MeetingActionItemsReview.vue

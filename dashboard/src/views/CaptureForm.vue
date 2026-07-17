@@ -65,32 +65,7 @@
         />
       </div>
 
-      <div>
-        <div class="text-subtitle2 q-mb-xs">Participants</div>
-        <div
-          v-for="(p, i) in participants"
-          :key="i"
-          class="row q-gutter-sm items-center q-mb-xs"
-        >
-          <q-input v-model="p.name" placeholder="Name" filled dense class="col" />
-          <q-input v-model="p.email" placeholder="Email (optional)" filled dense class="col" />
-          <q-btn
-            flat
-            round
-            dense
-            icon="close"
-            @click="participants.splice(i, 1)"
-            :disable="participants.length === 1"
-          />
-        </div>
-        <q-btn
-          flat
-          dense
-          icon="add"
-          label="Add participant"
-          @click="participants.push({ name: '', email: '' })"
-        />
-      </div>
+      <ParticipantListEditor v-model="participants" prevent-empty-list />
 
       <q-input
         v-model="transcript"
@@ -113,6 +88,7 @@ import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { Notify } from "quasar";
 import { captureMeeting, uploadMeetingTranscript, type CaptureMeetingResult } from "../api";
+import ParticipantListEditor from "../components/ParticipantListEditor.vue";
 
 const router = useRouter();
 

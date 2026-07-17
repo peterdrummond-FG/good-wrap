@@ -37,3 +37,26 @@ export function getToolUseInput(message: Anthropic.Message, toolName: string): u
   }
   return toolUse.input;
 }
+
+/**
+ * Single-user-message, forced-tool-use call — the shape shared by every
+ * one-shot grounded call (askQuestion.ts, personSummary.ts): send a system
+ * prompt + one user message, force the given tool, unwrap its input as T.
+ * Multi-step/retrying callers (extractInsights.ts) build their own
+ * messages.create call instead, since they need more control than this.
+ */
+export async function callToolOnce<T>(
+  system: string,
+  tool: Anthropic.Tool,
+  userContent: string
+): Promise<T> {
+  const message = await getClaudeClient().messages.create({
+    model: getClaudeModel(),
+    max_tokens: 1024,
+    system,
+    tools: [tool],
+    tool_choice: { type: "tool", name: tool.name },
+    messages: [{ role: "user", content: userContent }],
+  });
+  return getToolUseInput(message, tool.name) as T;
+}

@@ -229,7 +229,6 @@ export function deleteMeeting(id: string): Promise<Record<string, never>> {
 }
 
 export interface SubmitReviewInput {
-  keywords?: string[];
   /** Optional — takeaways aren't reviewed/edited here anymore; omit to leave unchanged. */
   takeaways?: SuggestionItem[];
   /** Optional — each review column now saves independently; omit the category you're not saving. */
