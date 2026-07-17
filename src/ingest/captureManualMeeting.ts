@@ -94,9 +94,15 @@ export interface CaptureManualMeetingInput {
    * env var since this is a personal-first tool with one real user today.
    */
   ownerEmail?: string;
-  /** 'manual' (default, Stage 0) or 'zoom' (Stage 6, once that's wired up). */
-  source?: "manual" | "zoom";
-  /** Only set for source: 'zoom' — nullable in the schema for manual entries. */
+  /**
+   * 'manual' (typed into the capture form, default), 'upload' (file upload
+   * or the folder auto-scan — same unattended-extraction path either way),
+   * or 'zoom' (webhook-driven).
+   */
+  source?: "manual" | "upload" | "zoom";
+  /** Only set for source: 'zoom' — Zoom's per-occurrence `uuid`, not its
+   * numeric `id` (which is reused across a recurring meeting's occurrences).
+   * Nullable in the schema for manual/upload entries. */
   zoomMeetingId?: string;
 }
 

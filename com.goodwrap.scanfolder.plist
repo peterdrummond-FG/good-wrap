@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.goodwrap.scanfolder</string>
+
+  <!-- Runs `npm run scan-folder` (src/ingest/scanFolder.ts) every 20 minutes. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/npm</string>
+    <string>run</string>
+    <string>scan-folder</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/peterdrummond/Documents/FG Good Wrap/good-wrap</string>
+
+  <!-- launchd's default PATH doesn't include /usr/local/bin, which is where
+       both npm and node live here — without this, npm's own #!/usr/bin/env
+       node shebang can't find node and the job fails silently. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StartInterval</key>
+  <integer>1200</integer>
+
+  <!-- Also run once immediately when the job is loaded, so you don't wait
+       up to 20 minutes to see the first result. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/peterdrummond/Documents/FG Good Wrap/good-wrap/logs/scan-folder.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/peterdrummond/Documents/FG Good Wrap/good-wrap/logs/scan-folder.log</string>
+</dict>
+</plist>

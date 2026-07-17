@@ -40,8 +40,9 @@ import {
   primaryKey,
   customType,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 // --- custom pgvector column type -------------------------------------------------
 // Drizzle core doesn't ship a pgvector type, so it's defined here using customType.
@@ -69,7 +70,11 @@ const vector = customType<{ data: number[]; driverData: string }>({
 });
 
 // --- enums -------------------------------------------------------------------------
-export const meetingSourceEnum = pgEnum("meeting_source", ["manual", "zoom"]);
+// "upload" added 2026-07-16 alongside file-upload/folder-auto-scan capture
+// (both write through captureManualMeeting the same way "manual" does — this
+// value exists purely so the dashboard's source display can tell an
+// unattended text-file capture apart from something Peter actually typed in).
+export const meetingSourceEnum = pgEnum("meeting_source", ["manual", "upload", "zoom"]);
 export const notificationChannelEnum = pgEnum("notification_channel", [
   "email",
   "chat",
@@ -109,18 +114,34 @@ export const people = pgTable("people", {
 });
 
 // --- meetings --------------------------------------------------------------------
-export const meetings = pgTable("meetings", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ownerId: uuid("owner_id")
-    .notNull()
-    .references(() => users.id),
-  zoomMeetingId: text("zoom_meeting_id"), // nullable — populated only for source = 'zoom'
-  topic: text("topic").notNull(),
-  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
-  durationMinutes: integer("duration_minutes"),
-  source: meetingSourceEnum("source").notNull().default("manual"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+// zoomMeetingId stores Zoom's per-occurrence `uuid`, NOT its numeric `id` —
+// `id` is reused across every occurrence of a recurring meeting, so keying
+// dedup on it would collapse distinct meetings together. Partial unique index
+// (added 2026-07-16 alongside the Zoom webhook, CODE-AUDIT.md's flagged risk)
+// guards against a duplicate webhook delivery creating two rows for the same
+// recording — the webhook handler itself also checks explicitly before
+// inserting, so this index is the last-resort safety net for a genuine race
+// between two concurrent retries, not the primary dedup path.
+export const meetings = pgTable(
+  "meetings",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    zoomMeetingId: text("zoom_meeting_id"), // nullable — populated only for source = 'zoom'
+    topic: text("topic").notNull(),
+    startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+    durationMinutes: integer("duration_minutes"),
+    source: meetingSourceEnum("source").notNull().default("manual"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    zoomMeetingIdUnique: uniqueIndex("meetings_zoom_meeting_id_unique")
+      .on(table.zoomMeetingId)
+      .where(sql`${table.zoomMeetingId} is not null`),
+  })
+);
 
 // --- meeting_participants ----------------------------------------------------------
 // Join table: which people attended which meeting.
@@ -228,6 +249,12 @@ export interface ActionItem {
   // added 2026-07-16) — the created task's gid, so the "Send to Asana"
   // button becomes a no-op re-send instead of creating a duplicate task.
   asanaTaskGid?: string;
+  // Marked complete by Peter (added 2026-07-16) — greys the item out in the
+  // UI but keeps it visible/listed, unlike delete which removes it outright.
+  // Distinct from `approved`: approved means "this is a real item I've
+  // committed to", done means "I've actually finished it." Only meaningful
+  // once approved.
+  done?: boolean;
 }
 
 // Follow-ups: things waiting on someone else, or unconfirmed items to revisit.
@@ -237,6 +264,8 @@ export interface FollowUpItem {
   person: string | null;
   urgency: Urgency;
   approved: boolean;
+  // Same meaning as ActionItem.done above.
+  done?: boolean;
 }
 
 export const meetingInsights = pgTable(

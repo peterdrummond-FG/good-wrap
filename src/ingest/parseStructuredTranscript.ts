@@ -1,0 +1,135 @@
+// Deterministic parser for the fixed transcript-export format Peter's export
+// tool always produces:
+//
+//   ============================================================
+//   MEETING INFO
+//   ============================================================
+//   Name: ...
+//   Date/Time: ...
+//   Duration: ...
+//   Meeting ID: ...
+//   UUID: ...
+//   ============================================================
+//   PARTICIPANTS
+//   ============================================================
+//   <one name per line>
+//   ============================================================
+//   TRANSCRIPT
+//   ============================================================
+//   <transcript body>
+//
+// Since this shape is guaranteed (not just "usually" the case), parsing it
+// with plain string logic is strictly better than an LLM guess: free, instant,
+// and immune to the class of bug extractMeetingMetadata.ts hit (inventing a
+// title, or misreading a joke/odd one) — there's nothing left to infer.
+// extractMeetingMetadata.ts remains the fallback for text that DOESN'T match
+// this structure (e.g. a freeform paste via the manual capture path).
+//
+// Each section in practice also carries a trailing "Fetching X..." status
+// line from the export tool (e.g. "Fetching participants..." at the end of
+// MEETING INFO) — harmless noise, filtered out below rather than assumed
+// absent.
+
+export interface StructuredTranscriptResult {
+  topic: string;
+  /** ISO timestamp. */
+  startTime: string;
+  durationMinutes?: number;
+  participants: { name: string }[];
+  /** Just the TRANSCRIPT section body — NOT the MEETING INFO/PARTICIPANTS
+   * header block, so downstream Claude calls (extractInsights, Q&A) and
+   * chunking/embeddings only ever see actual meeting content. */
+  transcript: string;
+}
+
+const SEPARATOR_RE = /^=+$/;
+
+// Splits into named sections keyed by whatever title line sits between two
+// separator lines (e.g. "MEETING INFO", "PARTICIPANTS", "TRANSCRIPT").
+function splitSections(rawText: string): Map<string, string> {
+  const lines = rawText.split(/\r?\n/);
+  const sections = new Map<string, string[]>();
+  let current: string | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const nextLine = lines[i + 1]?.trim();
+    const afterNextLine = lines[i + 2]?.trim();
+
+    if (SEPARATOR_RE.test(line) && nextLine && SEPARATOR_RE.test(afterNextLine ?? "")) {
+      current = nextLine;
+      sections.set(current, []);
+      i += 2; // skip the title line and its closing separator
+      continue;
+    }
+
+    if (current) sections.get(current)!.push(lines[i]);
+  }
+
+  return new Map([...sections].map(([title, contentLines]) => [title, contentLines.join("\n").trim()]));
+}
+
+// Parses "Key: value" lines within a section (e.g. MEETING INFO) into a
+// lookup map. Lines that don't match (like a trailing "Fetching..." status
+// line) are simply not present in the map — no special-casing needed.
+function parseKeyValueLines(sectionText: string): Map<string, string> {
+  const fields = new Map<string, string>();
+  for (const line of sectionText.split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z][\w /]*):\s*(.*)$/);
+    if (match) fields.set(match[1].trim(), match[2].trim());
+  }
+  return fields;
+}
+
+// Handles the "39m" / "1h 5m" shapes seen in the Duration field. Returns
+// undefined if neither an hours nor a minutes component is present, so the
+// caller's own fallback (no duration) applies rather than a false 0.
+function parseDurationMinutes(raw: string): number | undefined {
+  const hoursMatch = raw.match(/(\d+)\s*h/i);
+  const minsMatch = raw.match(/(\d+)\s*m/i);
+  if (!hoursMatch && !minsMatch) return undefined;
+  return (hoursMatch ? Number(hoursMatch[1]) * 60 : 0) + (minsMatch ? Number(minsMatch[1]) : 0);
+}
+
+/**
+ * Returns null if `rawText` doesn't have the MEETING INFO/TRANSCRIPT section
+ * structure at all — the caller should fall back to extractMeetingMetadata
+ * for arbitrary freeform text in that case. Within a recognized structure,
+ * an individual missing/unparseable field (blank Name, blank Date/Time, ...)
+ * falls back to the given fallbackTopic/fallbackStartTime individually,
+ * rather than abandoning the whole parse over one blank field.
+ */
+export function parseStructuredTranscript(
+  rawText: string,
+  fallbackTopic: string,
+  fallbackStartTime: Date
+): StructuredTranscriptResult | null {
+  const sections = splitSections(rawText);
+  const meetingInfo = sections.get("MEETING INFO");
+  const transcriptSection = sections.get("TRANSCRIPT");
+  if (!meetingInfo || !transcriptSection) return null;
+
+  const fields = parseKeyValueLines(meetingInfo);
+  const topic = fields.get("Name") || fallbackTopic;
+
+  let startTime = fallbackStartTime.toISOString();
+  const dateTimeRaw = fields.get("Date/Time");
+  if (dateTimeRaw) {
+    const parsed = new Date(dateTimeRaw);
+    if (!Number.isNaN(parsed.getTime())) startTime = parsed.toISOString();
+  }
+
+  const participants = (sections.get("PARTICIPANTS") ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^fetching/i.test(line))
+    .map((name) => ({ name }));
+
+  return {
+    topic,
+    startTime,
+    durationMinutes: parseDurationMinutes(fields.get("Duration") ?? ""),
+    participants,
+    transcript: transcriptSection,
+  };
+}

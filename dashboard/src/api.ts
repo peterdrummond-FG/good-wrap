@@ -9,7 +9,7 @@ export interface MeetingListItem {
   topic: string;
   startTime: string;
   durationMinutes: number | null;
-  source: "manual" | "zoom";
+  source: "manual" | "upload" | "zoom";
   participants: string[];
   reviewStatus: ReviewStatus;
   /** Top 3 APPROVED takeaways — empty until reviewed. */
@@ -35,6 +35,8 @@ export interface ActionItem {
   approved: boolean;
   /** Set once pushed to Asana — see sendActionItemToAsana below. */
   asanaTaskGid?: string;
+  /** Greys the item out — see setActionItemDone below. */
+  done?: boolean;
 }
 
 // Follow-ups: things waiting on someone else, or unconfirmed items.
@@ -43,18 +45,25 @@ export interface FollowUpItem {
   person: string | null;
   urgency: Urgency;
   approved: boolean;
+  /** Same meaning as ActionItem.done above. */
+  done?: boolean;
 }
 
 export interface FollowUpWithMeeting extends FollowUpItem {
   meetingId: string;
   meetingTopic: string;
   meetingStartTime: string;
+  /** This item's position in the meeting's own followUps array — needed to
+   * address it for done/delete. */
+  index: number;
 }
 
 export interface ActionItemWithMeeting extends ActionItem {
   meetingId: string;
   meetingTopic: string;
   meetingStartTime: string;
+  /** Same as FollowUpWithMeeting.index, for actionItems. */
+  index: number;
 }
 
 export interface MeetingDetail {
@@ -62,7 +71,7 @@ export interface MeetingDetail {
   topic: string;
   startTime: string;
   durationMinutes: number | null;
-  source: "manual" | "zoom";
+  source: "manual" | "upload" | "zoom";
   participants: string[];
   transcript: string | null;
   reviewStatus: ReviewStatus;
@@ -99,15 +108,18 @@ export interface AskResult {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  // Only send Content-Type: application/json when there's actually a body.
-  // Fastify's default JSON body parser rejects a request that claims a JSON
-  // content-type but sends an empty body (FST_ERR_CTP_EMPTY_JSON_BODY) — hit
-  // by processMeeting()/askQuestion() callers with no payload, e.g. the
-  // "Reprocess meeting" button (POST with no body).
+  // Only send Content-Type: application/json when there's actually a JSON
+  // body. Fastify's default JSON body parser rejects a request that claims a
+  // JSON content-type but sends an empty body (FST_ERR_CTP_EMPTY_JSON_BODY)
+  // — hit by processMeeting()/askQuestion() callers with no payload, e.g.
+  // the "Reprocess meeting" button (POST with no body). A FormData body
+  // (uploadMeetingTranscript below) must NOT get this header — the browser
+  // sets its own multipart/form-data content-type with the correct boundary.
+  const isFormData = options?.body instanceof FormData;
   const res = await fetch(`${API_BASE_URL}/api${path}`, {
     ...options,
     headers: {
-      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+      ...(options?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...options?.headers,
     },
   });
@@ -158,6 +170,29 @@ export interface CaptureMeetingResult {
 
 export function captureMeeting(input: CaptureMeetingInput): Promise<CaptureMeetingResult> {
   return request("/meetings", { method: "POST", body: JSON.stringify(input) });
+}
+
+// Metadata extractMeetingMetadata (src/ingest/extractMeetingMetadata.ts)
+// inferred from the raw file — surfaced so a bad guess is visible right
+// after upload rather than only discoverable by opening the meeting page.
+export interface ExtractedMeetingMetadata {
+  topic: string;
+  startTime: string;
+  durationMinutes?: number;
+  participants: { name?: string; email?: string }[];
+}
+
+export interface UploadMeetingResult extends CaptureMeetingResult {
+  metadata: ExtractedMeetingMetadata;
+}
+
+// File-upload capture (Peter's "upload a transcript" flow, see CaptureForm.vue)
+// — a single .txt file with no structured metadata attached; the backend
+// infers topic/date/duration/participants from the raw text itself.
+export function uploadMeetingTranscript(file: File): Promise<UploadMeetingResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request("/meetings/upload", { method: "POST", body: formData });
 }
 
 export function processMeeting(id: string) {
@@ -249,6 +284,39 @@ export interface SendActionItemToAsanaResult {
 // position in the meeting's actionItems array.
 export function sendActionItemToAsana(id: string, index: number): Promise<SendActionItemToAsanaResult> {
   return request(`/meetings/${id}/action-items/${index}/send-to-asana`, { method: "POST" });
+}
+
+// Toggles done — greys the item out but keeps it listed (delete below
+// removes it outright). `index` is this item's position in the meeting's
+// own actionItems/followUps array.
+export function setActionItemDone(
+  id: string,
+  index: number,
+  done: boolean
+): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/action-items/${index}/done`, {
+    method: "POST",
+    body: JSON.stringify({ done }),
+  });
+}
+
+export function deleteActionItem(id: string, index: number): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/action-items/${index}`, { method: "DELETE" });
+}
+
+export function setFollowUpDone(
+  id: string,
+  index: number,
+  done: boolean
+): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/follow-ups/${index}/done`, {
+    method: "POST",
+    body: JSON.stringify({ done }),
+  });
+}
+
+export function deleteFollowUp(id: string, index: number): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/follow-ups/${index}`, { method: "DELETE" });
 }
 
 export function fetchFollowUps(): Promise<{

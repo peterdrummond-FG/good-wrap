@@ -16,3 +16,4 @@ local_cache/
 *.tsbuildinfo
 vite.config.ts.timestamp-*.mjs
 dashboard/src/**/*.js
+logs/

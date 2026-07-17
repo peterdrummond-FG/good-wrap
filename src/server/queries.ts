@@ -69,6 +69,7 @@ export function normalizeActionItems(raw: unknown): ActionItem[] {
         urgency: normalizeUrgency(obj?.urgency),
         approved: Boolean(obj?.approved),
         asanaTaskGid: typeof obj?.asanaTaskGid === "string" ? obj.asanaTaskGid : undefined,
+        done: Boolean(obj?.done),
       };
     })
     .filter((a) => a.text.trim());
@@ -85,6 +86,7 @@ export function normalizeFollowUps(raw: unknown): FollowUpItem[] {
         person: obj?.person ?? null,
         urgency: normalizeUrgency(obj?.urgency),
         approved: Boolean(obj?.approved),
+        done: Boolean(obj?.done),
       };
     })
     .filter((f) => f.text.trim());
@@ -151,7 +153,7 @@ export interface MeetingListItem {
   topic: string;
   startTime: Date;
   durationMinutes: number | null;
-  source: "manual" | "zoom";
+  source: "manual" | "upload" | "zoom";
   participants: string[];
   reviewStatus: ReviewStatus;
   // Top 3 APPROVED takeaways — powers the Meetings Overview panel, whose
@@ -239,7 +241,7 @@ export interface MeetingDetail {
   topic: string;
   startTime: Date;
   durationMinutes: number | null;
-  source: "manual" | "zoom";
+  source: "manual" | "upload" | "zoom";
   participants: string[];
   transcript: string | null;
   reviewStatus: ReviewStatus;
@@ -318,16 +320,28 @@ export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail
 // needing to know about the meeting_insights <-> meetings join. Unapproved
 // suggestions never appear here — only the meeting detail page's review UI
 // sees the full candidate set.
+//
+// Includes done/sent items too, deliberately (2026-07-16) — the dashboard
+// panels filter those out for DISPLAY (an item marked done, or for action
+// items already sent to Asana, shouldn't clutter "what's still outstanding"
+// — it's still visible, greyed out, on the meeting detail page), but they
+// still need the full approved count here to tell "nothing's ever been
+// approved" apart from "everything's done" for their empty-state copy.
 export interface FollowUpWithMeeting extends FollowUpItem {
   meetingId: string;
   meetingTopic: string;
   meetingStartTime: Date;
+  /** This item's position in the meeting's own followUps array — needed to
+   * address it for done/delete (see setFollowUpDone/deleteFollowUp below). */
+  index: number;
 }
 
 export interface ActionItemWithMeeting extends ActionItem {
   meetingId: string;
   meetingTopic: string;
   meetingStartTime: Date;
+  /** Same as FollowUpWithMeeting.index, for actionItems. */
+  index: number;
 }
 
 export async function listFollowUps(): Promise<FollowUpWithMeeting[]> {
@@ -348,15 +362,16 @@ export async function listFollowUps(): Promise<FollowUpWithMeeting[]> {
     // or objects missing `approved`) — those always come back approved:
     // false here, so they simply won't surface until reviewed.
     const followUps = normalizeFollowUps(row.followUps);
-    for (const item of followUps) {
-      if (!item.approved) continue;
+    followUps.forEach((item, index) => {
+      if (!item.approved) return;
       flattened.push({
         ...item,
+        index,
         meetingId: row.meetingId,
         meetingTopic: row.meetingTopic,
         meetingStartTime: row.meetingStartTime,
       });
-    }
+    });
   }
   return flattened;
 }
@@ -376,15 +391,16 @@ export async function listActionItems(): Promise<ActionItemWithMeeting[]> {
   const flattened: ActionItemWithMeeting[] = [];
   for (const row of rows) {
     const actionItems = normalizeActionItems(row.actionItems);
-    for (const item of actionItems) {
-      if (!item.approved) continue;
+    actionItems.forEach((item, index) => {
+      if (!item.approved) return;
       flattened.push({
         ...item,
+        index,
         meetingId: row.meetingId,
         meetingTopic: row.meetingTopic,
         meetingStartTime: row.meetingStartTime,
       });
-    }
+    });
   }
   return flattened;
 }
@@ -612,7 +628,27 @@ export async function deleteMeeting(meetingId: string): Promise<boolean> {
   });
 }
 
-// --- Asana push (Action Items only — see src/integrations/asana.ts) --------------
+// --- Action item / follow-up item mutations (Asana push, done, delete) -----------
+// Shared by sendActionItemToAsana below and by setActionItemDone/
+// deleteActionItem/setFollowUpDone/deleteFollowUp — every one of these loads
+// the current meeting_insights row, mutates one item by its array position,
+// and writes the whole array back. `index` is the item's position in the
+// meeting's own actionItems/followUps array — the same convention the review
+// UI and the dashboard's flattened lists (see ActionItemWithMeeting/
+// FollowUpWithMeeting) already use to address a specific item.
+async function loadMeetingInsightsRow(meetingId: string) {
+  const [row] = await db
+    .select({
+      id: schema.meetingInsights.id,
+      actionItems: schema.meetingInsights.actionItems,
+      followUps: schema.meetingInsights.followUps,
+    })
+    .from(schema.meetingInsights)
+    .where(eq(schema.meetingInsights.meetingId, meetingId))
+    .orderBy(desc(schema.meetingInsights.generatedAt))
+    .limit(1);
+  return row ?? null;
+}
 
 export interface SendActionItemToAsanaResult {
   taskGid: string;
@@ -623,8 +659,7 @@ export interface SendActionItemToAsanaResult {
 /**
  * Pushes one Action Item to Asana and records the created task's gid on
  * that item, so a later call for the same index is a no-op instead of
- * creating a duplicate task. `index` is the item's position in the meeting's
- * current actionItems array (same convention the review UI already uses).
+ * creating a duplicate task.
  *
  * Returns null if the meeting/insights don't exist, or index is out of range
  * (caller should 404 either way).
@@ -640,15 +675,10 @@ export async function sendActionItemToAsana(
     .limit(1);
   if (!meeting) return null;
 
-  const [existingInsights] = await db
-    .select({ id: schema.meetingInsights.id, actionItems: schema.meetingInsights.actionItems })
-    .from(schema.meetingInsights)
-    .where(eq(schema.meetingInsights.meetingId, meetingId))
-    .orderBy(desc(schema.meetingInsights.generatedAt))
-    .limit(1);
-  if (!existingInsights) return null;
+  const insightsRow = await loadMeetingInsightsRow(meetingId);
+  if (!insightsRow) return null;
 
-  const actionItems = normalizeActionItems(existingInsights.actionItems);
+  const actionItems = normalizeActionItems(insightsRow.actionItems);
   const item = actionItems[index];
   if (!item) return null;
 
@@ -662,9 +692,56 @@ export async function sendActionItemToAsana(
   await db
     .update(schema.meetingInsights)
     .set({ actionItems })
-    .where(eq(schema.meetingInsights.id, existingInsights.id));
+    .where(eq(schema.meetingInsights.id, insightsRow.id));
 
   return { taskGid, alreadySent: false };
+}
+
+/** Toggles one Action Item's done state — greys it out in the UI without
+ * removing it. Returns false if the meeting/insights don't exist, or index
+ * is out of range (caller should 404 either way). */
+export async function setActionItemDone(meetingId: string, index: number, done: boolean): Promise<boolean> {
+  const row = await loadMeetingInsightsRow(meetingId);
+  if (!row) return false;
+  const actionItems = normalizeActionItems(row.actionItems);
+  if (!actionItems[index]) return false;
+  actionItems[index] = { ...actionItems[index], done };
+  await db.update(schema.meetingInsights).set({ actionItems }).where(eq(schema.meetingInsights.id, row.id));
+  return true;
+}
+
+/** Permanently removes one Action Item (not just unapproving it — it's gone
+ * from the array entirely). Same return-value convention as above. */
+export async function deleteActionItem(meetingId: string, index: number): Promise<boolean> {
+  const row = await loadMeetingInsightsRow(meetingId);
+  if (!row) return false;
+  const actionItems = normalizeActionItems(row.actionItems);
+  if (!actionItems[index]) return false;
+  actionItems.splice(index, 1);
+  await db.update(schema.meetingInsights).set({ actionItems }).where(eq(schema.meetingInsights.id, row.id));
+  return true;
+}
+
+/** Same as setActionItemDone, for Follow-ups. */
+export async function setFollowUpDone(meetingId: string, index: number, done: boolean): Promise<boolean> {
+  const row = await loadMeetingInsightsRow(meetingId);
+  if (!row) return false;
+  const followUps = normalizeFollowUps(row.followUps);
+  if (!followUps[index]) return false;
+  followUps[index] = { ...followUps[index], done };
+  await db.update(schema.meetingInsights).set({ followUps }).where(eq(schema.meetingInsights.id, row.id));
+  return true;
+}
+
+/** Same as deleteActionItem, for Follow-ups. */
+export async function deleteFollowUp(meetingId: string, index: number): Promise<boolean> {
+  const row = await loadMeetingInsightsRow(meetingId);
+  if (!row) return false;
+  const followUps = normalizeFollowUps(row.followUps);
+  if (!followUps[index]) return false;
+  followUps.splice(index, 1);
+  await db.update(schema.meetingInsights).set({ followUps }).where(eq(schema.meetingInsights.id, row.id));
+  return true;
 }
 
 // --- Manual person-history page (#9, 2026-07-16) ----------------------------------

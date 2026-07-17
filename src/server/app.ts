@@ -10,7 +10,10 @@
 
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import {
+  deleteActionItem,
+  deleteFollowUp,
   deleteMeeting,
   getCurrentUser,
   getMeetingDetail,
@@ -20,17 +23,65 @@ import {
   listMeetings,
   listPeople,
   sendActionItemToAsana,
+  setActionItemDone,
+  setFollowUpDone,
   updateMeeting,
   updateMeetingInsights,
   type UpdateMeetingInput,
   type UpdateMeetingInsightsInput,
 } from "./queries";
 import { captureManualMeeting, type CaptureManualMeetingInput } from "../ingest/captureManualMeeting";
+import { resolveCaptureContent } from "../ingest/resolveCaptureContent";
+import { handleZoomTranscriptEvent } from "../ingest/captureFromZoomWebhook";
 import { runFullPipeline } from "../pipeline/runFullPipeline";
 import { submitMeetingReview, type ReviewMeetingInput } from "../pipeline/reviewMeeting";
 import { regenerateInsightCategory, type RegenerateCategory } from "../pipeline/regenerateCategory";
 import { askQuestion } from "../qa/askQuestion";
 import { summarizePersonHistory } from "../qa/personSummary";
+import {
+  verifyZoomWebhookSignature,
+  isTimestampFresh,
+  buildUrlValidationResponse,
+  type ZoomWebhookEnvelope,
+} from "../integrations/zoom";
+
+// Fastify's default JSON parser only exposes the re-parsed object, not the
+// original bytes — augmented here so the Zoom webhook route (the one place
+// that needs it) can verify Zoom's HMAC signature against the exact string
+// Zoom signed, not a re-serialization of it that could differ in key order
+// or whitespace.
+declare module "fastify" {
+  interface FastifyRequest {
+    rawBody?: string;
+  }
+}
+
+// Shared by every action-items/:index and follow-ups/:index route below —
+// `index` addresses an item by its position in the meeting's own array (see
+// queries.ts's loadMeetingInsightsRow comment). Returns null on anything
+// that isn't a non-negative integer, so callers can 400 uniformly.
+function parseIndexParam(raw: string): number | null {
+  const index = Number(raw);
+  return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
+// Shared by every capture route (JSON form, file upload) — a meeting is
+// already safely written to the DB by the time this runs, so a processing
+// failure (e.g. a flaky Claude API call) is reported alongside a successful
+// capture rather than as a failure of the capture itself. Always resolves,
+// never throws — the dashboard's "Reprocess meeting" button covers retrying.
+async function autoProcess(
+  meetingId: string,
+  logError: (err: unknown) => void
+): Promise<{ processed: boolean; processingError?: string }> {
+  try {
+    await runFullPipeline(meetingId);
+    return { processed: true };
+  } catch (err) {
+    logError(err);
+    return { processed: false, processingError: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 export function buildApp() {
   const app = Fastify({ logger: true });
@@ -55,6 +106,26 @@ export function buildApp() {
     .map((o) => o.trim())
     .filter(Boolean);
   app.register(cors, { origin: [...defaultOrigins, ...extraOrigins] });
+
+  // File-upload capture (see POST /api/meetings/upload below). Capped well
+  // above any real transcript's size but still bounded — this feeds straight
+  // into in-memory Claude extraction and chunking/embedding downstream.
+  app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } });
+
+  // Replaces Fastify's default application/json parser so every request
+  // also gets its exact raw body stashed on req.rawBody (see the
+  // `declare module "fastify"` augmentation above) — needed only by the
+  // Zoom webhook route's signature check below, but registered globally
+  // since Fastify doesn't support a per-route content-type parser. Parsing
+  // behavior for every other JSON route is unchanged.
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+    req.rawBody = body as string;
+    try {
+      done(null, body.length ? JSON.parse(body as string) : {});
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
 
   // Every route below threw its own error straight to a per-route try/catch
   // that logged it and replied 400 with the error's message — identical
@@ -108,25 +179,60 @@ export function buildApp() {
 
     // Auto-process right after capture — Peter's call: a meeting shouldn't
     // need a manual "Process this meeting" click before it's useful, and this
-    // is the same code path Stage 6's Zoom webhook will hit later, so wiring
-    // it here now means nothing changes there when that lands.
-    //
-    // Deliberately a separate try/catch from the capture above: the meeting
-    // is already safely written to the DB at this point, so a processing
-    // failure (e.g. a flaky Claude API call) shouldn't be reported as if the
-    // whole capture failed. The dashboard still has the "Reprocess meeting"
-    // button in MeetingDetail.vue for this case.
-    try {
-      await runFullPipeline(result.meetingId);
-      return reply.code(201).send({ ...result, processed: true });
-    } catch (err) {
-      req.log.error(err, "Auto-processing failed after capture");
-      return reply.code(201).send({
-        ...result,
-        processed: false,
-        processingError: err instanceof Error ? err.message : String(err),
-      });
+    // is the same code path the Zoom webhook and file-upload capture below
+    // also use (see autoProcess above).
+    const outcome = await autoProcess(result.meetingId, (err) =>
+      req.log.error(err, "Auto-processing failed after capture")
+    );
+    return reply.code(201).send({ ...result, ...outcome });
+  });
+
+  // File-upload capture (Peter's "upload a transcript" flow) — a single .txt
+  // file with NO structured metadata attached, unlike the JSON route above.
+  // resolveCaptureContent parses topic/date/duration/participants/transcript
+  // deterministically when the file matches Peter's fixed export format
+  // (parseStructuredTranscript.ts), falling back to Claude-based inference
+  // (extractMeetingMetadata.ts) only for freeform text that doesn't. Capture
+  // + auto-process then proceed exactly as the JSON route above. Saves and
+  // processes immediately (no separate review-before-save step), matching
+  // how manual capture already behaves — the resolved metadata is returned
+  // alongside the result so a bad guess is visible right away.
+  app.post("/api/meetings/upload", async (req, reply) => {
+    const file = await req.file();
+    if (!file) {
+      return reply.code(400).send({ error: "No file uploaded — expected a single .txt transcript file." });
     }
+
+    const rawText = (await file.toBuffer()).toString("utf-8");
+    if (!rawText.trim()) {
+      return reply.code(400).send({ error: "Uploaded file is empty." });
+    }
+
+    const fallbackTopic = file.filename.replace(/\.[^./]+$/, "").trim() || "Uploaded meeting";
+    const metadata = await resolveCaptureContent({
+      rawText,
+      fallbackTopic,
+      fallbackStartTime: new Date(),
+    });
+
+    const result = await captureManualMeeting({
+      topic: metadata.topic,
+      startTime: metadata.startTime,
+      durationMinutes: metadata.durationMinutes,
+      participants: metadata.participants,
+      transcript: metadata.transcript,
+      source: "upload",
+    });
+
+    const outcome = await autoProcess(result.meetingId, (err) =>
+      req.log.error(err, "Auto-processing failed after upload capture")
+    );
+    // `transcript` omitted from the returned metadata — the dashboard only
+    // needs topic/startTime/durationMinutes/participants to show what was
+    // inferred/parsed, and it'd otherwise duplicate the whole stored
+    // transcript in the response body.
+    const { transcript: _transcript, ...visibleMetadata } = metadata;
+    return reply.code(201).send({ ...result, metadata: visibleMetadata, ...outcome });
   });
 
   app.patch<{ Params: { id: string }; Body: UpdateMeetingInput }>(
@@ -212,8 +318,8 @@ export function buildApp() {
   app.post<{ Params: { id: string; index: string } }>(
     "/api/meetings/:id/action-items/:index/send-to-asana",
     async (req, reply) => {
-      const index = Number(req.params.index);
-      if (!Number.isInteger(index) || index < 0) {
+      const index = parseIndexParam(req.params.index);
+      if (index === null) {
         return reply
           .code(400)
           .send({ error: `index must be a non-negative integer, got: ${req.params.index}` });
@@ -226,6 +332,91 @@ export function buildApp() {
       }
       const meeting = await getMeetingDetail(req.params.id);
       return reply.send({ ...result, meeting });
+    }
+  );
+
+  // Toggles one Action Item's done state (greys it out in the UI, doesn't
+  // remove it — see db/schema.ts's ActionItem.done comment).
+  app.post<{ Params: { id: string; index: string }; Body: { done?: boolean } }>(
+    "/api/meetings/:id/action-items/:index/done",
+    async (req, reply) => {
+      const index = parseIndexParam(req.params.index);
+      if (index === null) {
+        return reply
+          .code(400)
+          .send({ error: `index must be a non-negative integer, got: ${req.params.index}` });
+      }
+      const found = await setActionItemDone(req.params.id, index, Boolean(req.body?.done));
+      if (!found) {
+        return reply
+          .code(404)
+          .send({ error: `No action item found at index ${index} for meeting ${req.params.id}` });
+      }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ meeting });
+    }
+  );
+
+  // Permanently removes one Action Item — not just unapproving it.
+  app.delete<{ Params: { id: string; index: string } }>(
+    "/api/meetings/:id/action-items/:index",
+    async (req, reply) => {
+      const index = parseIndexParam(req.params.index);
+      if (index === null) {
+        return reply
+          .code(400)
+          .send({ error: `index must be a non-negative integer, got: ${req.params.index}` });
+      }
+      const found = await deleteActionItem(req.params.id, index);
+      if (!found) {
+        return reply
+          .code(404)
+          .send({ error: `No action item found at index ${index} for meeting ${req.params.id}` });
+      }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ meeting });
+    }
+  );
+
+  // Same as the two Action Item routes above, for Follow-ups (no Asana push
+  // here — Follow-ups are explicitly other people's tasks, never Peter's).
+  app.post<{ Params: { id: string; index: string }; Body: { done?: boolean } }>(
+    "/api/meetings/:id/follow-ups/:index/done",
+    async (req, reply) => {
+      const index = parseIndexParam(req.params.index);
+      if (index === null) {
+        return reply
+          .code(400)
+          .send({ error: `index must be a non-negative integer, got: ${req.params.index}` });
+      }
+      const found = await setFollowUpDone(req.params.id, index, Boolean(req.body?.done));
+      if (!found) {
+        return reply
+          .code(404)
+          .send({ error: `No follow-up found at index ${index} for meeting ${req.params.id}` });
+      }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ meeting });
+    }
+  );
+
+  app.delete<{ Params: { id: string; index: string } }>(
+    "/api/meetings/:id/follow-ups/:index",
+    async (req, reply) => {
+      const index = parseIndexParam(req.params.index);
+      if (index === null) {
+        return reply
+          .code(400)
+          .send({ error: `index must be a non-negative integer, got: ${req.params.index}` });
+      }
+      const found = await deleteFollowUp(req.params.id, index);
+      if (!found) {
+        return reply
+          .code(404)
+          .send({ error: `No follow-up found at index ${index} for meeting ${req.params.id}` });
+      }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ meeting });
     }
   );
 
@@ -273,6 +464,55 @@ export function buildApp() {
       return reply.code(404).send({ error: `No person found for id ${req.params.id}` });
     }
     return reply.send(result);
+  });
+
+  // Zoom webhook — automatic capture path (a), see .env.example for the
+  // required ZOOM_* env vars and captureFromZoomWebhook.ts for the
+  // downstream orchestration. This endpoint has no other auth, so the HMAC
+  // signature check below is the only thing standing between it and the
+  // open internet (Zoom's own recommended verification, not optional here).
+  app.post<{ Body: ZoomWebhookEnvelope }>("/api/webhooks/zoom", async (req, reply) => {
+    const body = req.body;
+
+    // One-time handshake Zoom performs when a webhook subscription's URL is
+    // saved/validated in the Marketplace UI — no signature to check yet at
+    // this point, since Zoom is asking us to prove we hold the secret, not
+    // the other way around.
+    if (body?.event === "endpoint.url_validation") {
+      const plainToken = body.payload?.plainToken;
+      if (!plainToken) {
+        return reply.code(400).send({ error: "Missing payload.plainToken for endpoint.url_validation." });
+      }
+      return reply.send(buildUrlValidationResponse(plainToken));
+    }
+
+    const signature = req.headers["x-zm-signature"];
+    const timestamp = req.headers["x-zm-request-timestamp"];
+    if (
+      typeof signature !== "string" ||
+      typeof timestamp !== "string" ||
+      !isTimestampFresh(timestamp) ||
+      !verifyZoomWebhookSignature({ rawBody: req.rawBody ?? "", timestamp, signature })
+    ) {
+      return reply.code(401).send({ error: "Invalid or stale Zoom webhook signature." });
+    }
+
+    // Ack immediately — Zoom expects a fast response and retries
+    // aggressively on timeout/non-2xx, and the real work below (transcript
+    // download + Claude calls) can easily take longer than it's willing to
+    // wait. Everything after this point runs detached from the
+    // request/reply lifecycle: its promise is deliberately never awaited or
+    // returned, and its `.catch` is the ONLY place its errors are ever
+    // observed — nothing here may throw back into Fastify after `send()`
+    // has already been called, or the app-wide error handler would attempt
+    // to reply a second time.
+    reply.code(200).send({ received: true });
+
+    if (body.event === "recording.transcript_completed") {
+      void handleZoomTranscriptEvent(body).catch((err) => {
+        req.log.error(err, "Zoom webhook processing failed");
+      });
+    }
   });
 
   return app;
