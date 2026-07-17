@@ -60,7 +60,14 @@
             >
               <div class="row items-center no-wrap">
                 <div class="col">
-                  <div class="bw-row__title">{{ f.text }}</div>
+                  <div class="row items-center no-wrap">
+                    <CompanyTag
+                      v-if="meetingCompanyById.get(f.meetingId)"
+                      :company="meetingCompanyById.get(f.meetingId)!"
+                      class="q-mr-xs"
+                    />
+                    <div class="bw-row__title">{{ f.text }}</div>
+                  </div>
                   <div class="bw-row__meta">
                     <span v-if="f.person">with <PersonTag :name="f.person" /> · </span>{{ f.meetingTopic }}
                   </div>
@@ -83,7 +90,10 @@
           </div>
           <div class="bw-panel__body">
             <router-link v-for="m in meetingsNeedingApproval" :key="m.id" :to="`/meetings/${m.id}`" class="bw-row">
-              <div class="bw-row__title">{{ m.topic }}</div>
+              <div class="row items-center no-wrap">
+                <CompanyTag v-if="m.company" :company="m.company" class="q-mr-xs" />
+                <div class="bw-row__title">{{ m.topic }}</div>
+              </div>
               <div class="bw-row__meta">{{ formatDate(m.startTime) }}</div>
             </router-link>
             <div v-if="!meetingsNeedingApproval.length && !loading" class="text-grey-7 q-pa-md text-center">
@@ -101,21 +111,25 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useDashboardStats } from "../composables/useDashboardStats";
-import { fetchCompanies, type Company } from "../api";
-import { useAsyncList } from "../composables/useAsyncList";
+import { UNCATEGORIZED_COMPANY_FILTER, useCompanies } from "../composables/useCompanies";
 import { urgencyLabel, urgencyPillClass } from "../urgency";
 import { formatMeetingDateTime as formatDate } from "../formatDate";
 import PersonTag from "../components/PersonTag.vue";
+import CompanyTag from "../components/CompanyTag.vue";
 import StatTile from "../components/StatTile.vue";
 
 // Company filter (added 2026-07-17) — scopes every stat/list on this page to
 // one portfolio company at a glance.
-const { data: companies } = useAsyncList(async () => (await fetchCompanies()).companies, [] as Company[]);
+const { companies } = useCompanies();
 const selectedCompanyId = ref<string | null>(null);
-const companyOptions = computed(() => companies.value.map((c) => ({ label: c.name, value: c.id })));
-const selectedCompanyLabel = computed(
-  () => companies.value.find((c) => c.id === selectedCompanyId.value)?.name ?? "All companies"
-);
+const companyOptions = computed(() => [
+  { label: "Uncategorized", value: UNCATEGORIZED_COMPANY_FILTER },
+  ...companies.value.map((c) => ({ label: c.name, value: c.id })),
+]);
+const selectedCompanyLabel = computed(() => {
+  if (selectedCompanyId.value === UNCATEGORIZED_COMPANY_FILTER) return "Uncategorized";
+  return companies.value.find((c) => c.id === selectedCompanyId.value)?.name ?? "All companies";
+});
 
 const {
   loading,
@@ -125,5 +139,6 @@ const {
   overdueCount,
   topFollowUpsThisWeek,
   meetingsNeedingApproval,
+  meetingCompanyById,
 } = useDashboardStats(selectedCompanyId);
 </script>

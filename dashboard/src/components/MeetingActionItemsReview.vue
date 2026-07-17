@@ -69,7 +69,14 @@
           >
             <span class="col">{{ a.text }}</span>
             <span v-if="a.asanaTaskGid" class="bw-asana-sent">
-              <img src="/logos/asana.png" alt="Sent to Asana" class="bw-asana-sent__icon">
+              <img
+                v-if="!asanaIconFailed"
+                src="/logos/asana.png"
+                alt="Sent to Asana"
+                class="bw-asana-sent__icon"
+                @error="asanaIconFailed = true"
+              />
+              <q-icon v-else name="check_circle" color="grey-6" size="16px" />
               <q-tooltip>Sent to Asana</q-tooltip>
             </span>
             <q-btn
@@ -133,6 +140,9 @@ const meetingModel = computed<MeetingDetail | null>({
 });
 
 const error = ref("");
+// Falls back to a generic icon if the Asana logo asset is ever missing/renamed
+// (same graceful-degrade idea as CompanyTag.vue), rather than a broken-image glyph.
+const asanaIconFailed = ref(false);
 
 const actionItemsReview = useReviewCategory<{ text: string; urgency: Urgency; approved: boolean }>({
   meetingId: props.meetingId,

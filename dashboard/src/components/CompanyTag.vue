@@ -26,27 +26,22 @@ import { personColor } from "../personColor";
 
 const props = defineProps<{ company: Company }>();
 
-// Logos were dropped in as a mix of .svg and .png (see that folder's
-// README) — try each extension in turn, falling back to the colored-initials
-// badge only once every extension has 404'd for this company's slug.
-const EXTENSIONS = ["svg", "png"];
-const extensionIndex = ref(0);
+// Logos are dropped in as .png (see that folder's README) — falls back to
+// the colored-initials badge once the file 404s (no logo placed yet for
+// this company's slug).
+const logoFailed = ref(false);
 
 watch(
   () => props.company.slug,
   () => {
-    extensionIndex.value = 0;
+    logoFailed.value = false;
   }
 );
 
-const logoSrc = computed(() =>
-  extensionIndex.value < EXTENSIONS.length
-    ? `/logos/${props.company.slug}.${EXTENSIONS[extensionIndex.value]}`
-    : null
-);
+const logoSrc = computed(() => (logoFailed.value ? null : `/logos/${props.company.slug}.png`));
 
 function onImgError() {
-  extensionIndex.value += 1;
+  logoFailed.value = true;
 }
 
 const initials = computed(() =>

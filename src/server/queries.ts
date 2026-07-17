@@ -1,7 +1,7 @@
 // Stage 4: read/write helpers backing the dashboard API. Kept separate from
 // the route definitions (app.ts) so they're easy to reuse or test on their own.
 
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { db, schema } from "../db/client";
 import type { ActionItem, FollowUpItem, SuggestionItem, Urgency } from "../../db/schema";
 import { resolveParticipantIds, type CaptureParticipantInput } from "../ingest/captureManualMeeting";
@@ -61,33 +61,39 @@ export async function setMeetingCompany(meetingId: string, companyId: string | n
 /**
  * Applies Claude's own company guess from a (re)process — but ONLY if the
  * meeting hasn't been manually tagged already (companySource === "manual"
- * always wins, see db/schema.ts). `companySlug` is `null`/unrecognized when
- * Claude couldn't confidently classify the meeting, which clears any prior
- * AI guess rather than leaving a stale one in place. No-op if the meeting
- * doesn't exist (callers already know it does, having just processed it).
+ * always wins, see db/schema.ts). The "not manual" check is enforced
+ * atomically in the UPDATE's own WHERE clause (not a separate read-then-
+ * write), so a manual pick landing mid-reprocess can't be raced and
+ * clobbered by this call finishing after it.
+ *
+ * `companySlug` is `null`/unrecognized when Claude couldn't confidently
+ * classify the meeting this run. Rather than clearing a prior AI guess back
+ * to untagged on a less-confident re-run, this is a no-op in that case —
+ * only a different, resolved slug (or a manual override) can change an
+ * existing AI-sourced tag.
  */
 export async function applyAiCompanyGuess(meetingId: string, companySlug: string | null): Promise<void> {
-  const [meeting] = await db
-    .select({ companySource: schema.meetings.companySource })
-    .from(schema.meetings)
-    .where(eq(schema.meetings.id, meetingId))
-    .limit(1);
-  if (!meeting || meeting.companySource === "manual") return;
+  if (!companySlug) return;
 
-  let companyId: string | null = null;
-  if (companySlug) {
-    const [company] = await db
-      .select({ id: schema.companies.id })
-      .from(schema.companies)
-      .where(eq(schema.companies.slug, companySlug))
-      .limit(1);
-    companyId = company?.id ?? null;
+  const [company] = await db
+    .select({ id: schema.companies.id })
+    .from(schema.companies)
+    .where(eq(schema.companies.slug, companySlug))
+    .limit(1);
+  if (!company) {
+    console.warn(`applyAiCompanyGuess: unrecognized company slug "${companySlug}" — leaving company tag unchanged.`);
+    return;
   }
 
   await db
     .update(schema.meetings)
-    .set({ companyId, companySource: companyId ? "ai" : null })
-    .where(eq(schema.meetings.id, meetingId));
+    .set({ companyId: company.id, companySource: "ai" })
+    .where(
+      and(
+        eq(schema.meetings.id, meetingId),
+        or(isNull(schema.meetings.companySource), ne(schema.meetings.companySource, "manual"))
+      )
+    );
 }
 
 // Three-state status the dashboard badges key off (added 2026-07-16 with the

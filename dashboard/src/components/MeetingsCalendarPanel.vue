@@ -144,10 +144,12 @@
               :class="{ 'bw-list-row--selected': m.id === selectedMeetingId }"
               @click="$emit('select', m.id)"
             >
-              <CompanyTag v-if="m.company" :company="m.company" class="bw-list-row__company" />
               <div class="row items-center justify-between no-wrap">
                 <div class="col">
-                  <div class="bw-row__title">{{ m.topic }}</div>
+                  <div class="row items-center no-wrap">
+                    <CompanyTag v-if="m.company" :company="m.company" class="bw-list-row__company" />
+                    <div class="bw-row__title">{{ m.topic }}</div>
+                  </div>
                   <div class="bw-row__meta">{{ formatTime(m.startTime) }}</div>
                 </div>
                 <span class="bw-pill" :class="pillClass(m.reviewStatus)">{{ listStatusLabel(m.reviewStatus) }}</span>
@@ -166,8 +168,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { fetchCompanies, type Company, type MeetingListItem, type ReviewStatus } from "../api";
-import { useAsyncList } from "../composables/useAsyncList";
+import { type MeetingListItem, type ReviewStatus } from "../api";
+import { UNCATEGORIZED_COMPANY_FILTER, useCompanies } from "../composables/useCompanies";
 import { isSameLocalDay, startOfDay, startOfWeek } from "../dateBuckets";
 import { reviewStatusListLabel, reviewStatusPillClass } from "../reviewStatus";
 import CompanyTag from "./CompanyTag.vue";
@@ -180,17 +182,25 @@ const props = defineProps<{
 
 // Company filter (added 2026-07-17) — lets Peter see all meetings for one
 // portfolio company at a glance, both in Calendar and List mode.
-const { data: companies } = useAsyncList(async () => (await fetchCompanies()).companies, [] as Company[]);
+const { companies } = useCompanies();
+// UNCATEGORIZED_COMPANY_FILTER is distinct from `null` (which means "no
+// filter, show all") — lets the dropdown also filter down to meetings with
+// no company tag at all, same as the per-meeting picker's own
+// "Uncategorized" option.
 const selectedCompanyId = ref<string | null>(null);
-const companyFilterOptions = computed(() => companies.value.map((c) => ({ label: c.name, value: c.id })));
-const selectedCompanyLabel = computed(
-  () => companies.value.find((c) => c.id === selectedCompanyId.value)?.name ?? "All companies"
-);
-const filteredMeetings = computed(() =>
-  selectedCompanyId.value
-    ? props.meetings.filter((m) => m.company?.id === selectedCompanyId.value)
-    : props.meetings
-);
+const companyFilterOptions = computed(() => [
+  { label: "Uncategorized", value: UNCATEGORIZED_COMPANY_FILTER },
+  ...companies.value.map((c) => ({ label: c.name, value: c.id })),
+]);
+const selectedCompanyLabel = computed(() => {
+  if (selectedCompanyId.value === UNCATEGORIZED_COMPANY_FILTER) return "Uncategorized";
+  return companies.value.find((c) => c.id === selectedCompanyId.value)?.name ?? "All companies";
+});
+const filteredMeetings = computed(() => {
+  if (!selectedCompanyId.value) return props.meetings;
+  if (selectedCompanyId.value === UNCATEGORIZED_COMPANY_FILTER) return props.meetings.filter((m) => !m.company);
+  return props.meetings.filter((m) => m.company?.id === selectedCompanyId.value);
+});
 
 const emit = defineEmits<{
   (e: "update:selectedDate", date: Date): void;
@@ -615,8 +625,7 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   outline-offset: 1px;
 }
 .bw-list-row__company {
-  position: absolute;
-  top: 8px;
-  right: 10px;
+  margin-right: 6px;
+  flex-shrink: 0;
 }
 </style>

@@ -12,8 +12,8 @@
       </div>
 
       <div class="bw-meetings-layout__detail">
-        <q-banner v-if="error" class="bg-red-1 text-red-9 q-mb-md" rounded>
-          {{ error }}
+        <q-banner v-if="error || companiesError" class="bg-red-1 text-red-9 q-mb-md" rounded>
+          {{ error || companiesError }}
         </q-banner>
 
         <template v-if="meeting">
@@ -24,7 +24,7 @@
                 <span class="bw-pill" :class="pillClass(meeting.reviewStatus)">{{
                   reviewStatusLabel(meeting.reviewStatus)
                 }}</span>
-                <q-btn-dropdown flat dense no-caps content-class="bw-company-menu" class="bw-company-picker">
+                <q-btn-dropdown flat dense no-caps>
                   <template #label>
                     <span class="row items-center q-gutter-xs">
                       <CompanyTag v-if="meeting.company" :company="meeting.company" />
@@ -143,17 +143,16 @@ import { useRoute, useRouter } from "vue-router";
 import { Dialog, Notify } from "quasar";
 import {
   deleteMeeting,
-  fetchCompanies,
   fetchMeetingDetail,
   fetchMeetings,
   processMeeting,
   regenerateInsightCategory,
   setMeetingCompany,
-  type Company,
   type MeetingDetail,
   type MeetingListItem,
 } from "../api";
 import { useAsyncList } from "../composables/useAsyncList";
+import { useCompanies } from "../composables/useCompanies";
 import { isSameLocalDay, startOfDay } from "../dateBuckets";
 import { formatMeetingDateTime as formatDate } from "../formatDate";
 import { reviewStatusDetailLabel as reviewStatusLabel, reviewStatusPillClass as pillClass } from "../reviewStatus";
@@ -177,7 +176,7 @@ const { data: meetings, loading: meetingsLoading, refetch: refetchMeetings } = u
   [] as MeetingListItem[]
 );
 
-const { data: companies } = useAsyncList(async () => (await fetchCompanies()).companies, [] as Company[]);
+const { companies, error: companiesError } = useCompanies();
 
 const selectedDate = ref<Date>(startOfDay(new Date()));
 const selectedMeetingId = ref<string | null>(props.id ?? null);

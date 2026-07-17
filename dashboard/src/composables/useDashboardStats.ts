@@ -13,6 +13,7 @@ import {
   type MeetingListItem,
 } from "../api";
 import { useAsyncList } from "./useAsyncList";
+import { UNCATEGORIZED_COMPANY_FILTER } from "./useCompanies";
 import { startOfWeek } from "../dateBuckets";
 import { sortByUrgency } from "../urgency";
 
@@ -50,16 +51,23 @@ export function useDashboardStats(companyId?: Ref<string | null>) {
     actionItems: [] as ActionItemWithMeeting[],
   });
 
-  const meetingCompanyById = computed(() => new Map(meetings.value.map((m) => [m.id, m.company?.id ?? null])));
+  // Keyed by the full Company object (not just its id) so callers — e.g.
+  // Dashboard.vue's Top Follow-ups list, whose items don't carry their own
+  // `company` field — can render a company badge without a second lookup.
+  const meetingCompanyById = computed(() => new Map(meetings.value.map((m) => [m.id, m.company])));
 
   function matchesCompanyFilter(meetingId: string): boolean {
     if (!companyId?.value) return true;
-    return meetingCompanyById.value.get(meetingId) === companyId.value;
+    const company = meetingCompanyById.value.get(meetingId) ?? null;
+    if (companyId.value === UNCATEGORIZED_COMPANY_FILTER) return company === null;
+    return company?.id === companyId.value;
   }
 
-  const scopedMeetings = computed(() =>
-    companyId?.value ? meetings.value.filter((m) => m.company?.id === companyId.value) : meetings.value
-  );
+  const scopedMeetings = computed(() => {
+    if (!companyId?.value) return meetings.value;
+    if (companyId.value === UNCATEGORIZED_COMPANY_FILTER) return meetings.value.filter((m) => !m.company);
+    return meetings.value.filter((m) => m.company?.id === companyId.value);
+  });
   const scopedFollowUps = computed(() => followUpData.value.followUps.filter((f) => matchesCompanyFilter(f.meetingId)));
   const scopedActionItems = computed(() =>
     followUpData.value.actionItems.filter((a) => matchesCompanyFilter(a.meetingId))
@@ -124,5 +132,9 @@ export function useDashboardStats(companyId?: Ref<string | null>) {
     overdueCount,
     topFollowUpsThisWeek,
     meetingsNeedingApproval,
+    // Exposed so a template can look up a follow-up/action-item's company
+    // badge (those items don't carry their own `company` field — see the
+    // comment on meetingCompanyById above).
+    meetingCompanyById,
   };
 }
