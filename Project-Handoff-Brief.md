@@ -468,3 +468,58 @@ This is explicitly a hypothesis, not a proven fix — same as the split was. If 
 **Follow-up same day: urgency pills removed from Action Items on the meeting-detail review column too.** Peter looked at a live meeting-detail page and pointed out Action Items still showed "Medium" pills — the earlier "just a flat, copyable list, no ranking" change (Section 16) had been explicitly scoped to the dashboard panel only at the time (he picked "Dashboard panel only (recommended)" when asked), leaving the review column showing urgency on purpose, on the reasoning that urgency helps decide what to approve. Asked him to confirm given he was now looking at it fresh; he chose to remove it from the review column too, for consistency.
 
 `MeetingDetail.vue`: Action Items' checklist view and its collapsed approved-view both dropped the `urgencyPillClass`/`urgencyLabel` markup; `sortedReviewActionItems` (which sorted by urgency) removed entirely — the checklist now iterates `reviewActionItems` directly in whatever order the API returned; `approvedActionItems` no longer wraps its filter in `sortByUrgency`. Follow-ups' review column is untouched — still sorted most-urgent-first with urgency pills and `PersonTag`, since that request was specific to Action Items only. `urgency` is still stored on every `ActionItem` (schema/extraction/`addActionItem`'s default all unchanged) — it's just not displayed or sorted-by anywhere now, action items and follow-ups alike, dashboard panel and review column alike. `npx vue-tsc -b` and a scratch-`outDir` `vite build` (160 modules) both pass clean.
+
+---
+
+## 17. Session Update: Everything Since Section 16 — New Capture Paths, Search/Edit/Asana/People, Meetings Redesign, Local-Claude Folder Scan, Code-Quality Pass, Company Tagging, Bug Fixes (2026-07-16/17)
+
+**This section exists because the brief fell behind reality.** Several real, committed features landed after Section 16 without ever being written up here — this catches it up to the actual current state of the repo. If this doc and `git log`/the codebase ever disagree again, trust the code; then fix this doc.
+
+### 17.1 New capture paths (2026-07-16, commit `5d50c36`)
+
+- Direct `.txt` transcript upload (`POST /api/meetings/upload`), metadata auto-extracted from the file (`src/ingest/extractMeetingMetadata.ts`, `parseStructuredTranscript.ts`).
+- **Live Zoom webhook is built** (`POST /api/webhooks/zoom`, `src/integrations/zoom.ts`, `src/ingest/captureFromZoomWebhook.ts`) — this is Stage 6 from Section 4 of this doc, no longer deferred. HMAC-signature verified against the raw request body (Zoom's own recommended check), replies `200` immediately and processes detached from the request (Zoom's own delivery timeout requires this), downloads the Zoom cloud recording's WEBVTT transcript file and converts it to plain speaker-labeled text, then feeds into the same pipeline manual capture uses.
+- Local folder auto-scan (`src/ingest/scanFolder.ts` + `com.goodwrap.scanfolder.plist`, a macOS launchd job every ~20 min) — drop a `.txt` transcript in a watched folder, it's picked up automatically. Reworked again in 17.4 below.
+
+### 17.2 Search, inline editing, Asana push, person pages (2026-07-16, commit `8f0aa0a`)
+
+- **Reprocess-safe merge-forward** (`src/pipeline/mergeApprovedForward.ts`) — reprocessing a meeting or regenerating one category no longer discards previously-approved action items/follow-ups (this was CODE-AUDIT.md's item #5); new candidates merge in against what's already approved, deduped by text.
+- Meetings panel got client-side topic/keyword search, a participant filter, and date-range filtering; `listMeetings` now also returns `keywords` to support it.
+- Action Items became inline-editable (text); Follow-ups became inline-editable (text, urgency, and person — reassignable or clearable) via the existing review composable, not just approve/reject.
+- Manual **"Send to Asana"** button on approved Action Items (`src/integrations/asana.ts`) — pushes to a dedicated good-wrap Asana project (not Flippen Group's ~100 shared client boards), assignee `"me"`, idempotent via a stored `asanaTaskGid` checked before ever calling Asana again.
+- New **`/people`** section — a person picker plus a per-person page showing meeting history, follow-ups involving them, and an on-demand Claude summary (person-scoped RAG, `src/qa/personSummary.ts`) of what to bring up next time they meet. No calendar integration — manual/on-demand only; Stage 7 from Section 4 is still not built.
+
+### 17.3 Meetings screen redesign, Dashboard as stats summary (2026-07-16, commit `fe7e162`)
+
+The old single meeting-detail page (`MeetingDetail.vue`, referenced throughout Section 16 above) **no longer exists** — replaced by a calendar-style Meetings screen (`dashboard/src/views/MeetingsView.vue` + `dashboard/src/components/MeetingsCalendarPanel.vue`): a day timeline or week list on the left (a hand-built mini month picker, full-width and independent of Quasar's fixed-size `q-date`), with Takeaways/Action Items/Follow-ups for whichever meeting is selected shown on the right of the same page.
+
+Dashboard (`dashboard/src/views/Dashboard.vue`) dropped the old drag-reorderable 3/4-panel layout (Section 13/15) in favor of stat tiles (Needs Approval, this week's Action Items/Follow-ups, Overdue) plus two short priority lists (Top Follow-ups This Week, Meetings Needing Approval), all backed by `dashboard/src/composables/useDashboardStats.ts` off data every other view already fetches — no new backend endpoints.
+
+### 17.4 Folder-scan reworked to local Claude Code (2026-07-17, commits `c9f350e`, `827d18a`, `c2c694d`)
+
+`scanFolder.ts` no longer calls Claude via `ANTHROPIC_API_KEY` itself — it now only handles deterministic file-locking/move mechanics, exposed as `list`/`claim`/`finish` subcommands. A new skill, `.claude/skills/process-transcripts/SKILL.md`, drives the actual work: a **local Claude Code session** reads each transcript and generates keywords/takeaways/action items/follow-ups/company itself, billed to Peter's Claude Code plan/session usage instead of the `ANTHROPIC_API_KEY`-billed API. It POSTs the result to a new `POST /api/meetings/upload-processed` endpoint (`src/server/app.ts`), authenticated by a shared secret (`x-worker-key` header / `LOCAL_WORKER_API_KEY` env var) rather than a schema-enforced Claude tool-use call — `src/ingest/validateProcessedInsights.ts` does the shape validation forced tool-use would otherwise guarantee for free. The launchd job (`com.goodwrap.scanfolder.plist`) now invokes `claude -p` headlessly instead of `npm run scan-folder` directly.
+
+Two bugs found and fixed live the same day: an OOM crash in this new upload-processed route on a real ~36KB transcript (`embedChunks`'s batch size lowered to 8, matching the existing fix already on the Reprocess route for the same reason); and the skill's own instructions for reading `GOODWRAP_API_BASE_URL`/`LOCAL_WORKER_API_KEY` directly from `.env` via `grep`/`cut` rather than assuming they're shell-exported — they aren't, when launchd runs the skill headlessly with no interactive shell to source `.env` into.
+
+### 17.5 Code-quality pass (2026-07-17, commit `8676d74`) — full writeup in `Architecture-Quality-Review-2026-07-17.md`
+
+No functional changes. Deduped the QA retrieval scaffolding shared by `askQuestion.ts`/`personSummary.ts` into `src/qa/retrieveChunks.ts` + a shared `callToolOnce()` helper; added a `useKeyedAsyncAction` composable to collapse repeated async-handler boilerplate across the Action Items/Follow-ups review columns; extracted `ParticipantListEditor.vue` out of `CaptureForm.vue`/`MeetingEditDialog.vue`; removed a few confirmed-dead code paths (a takeaways filter that could never remove anything, an unused `SubmitReviewInput.keywords` field).
+
+### 17.6 Company tagging (2026-07-17, commit `c2fceeb`) — see the `project-company-tagging` memory note for full detail
+
+Meetings can now be tagged with which Flippen Group portfolio company they concern (Teachworthy, Teamalytics, Capturing Kids Hearts, Integrous, Galleria, Maisey, or Flippen Group itself for internal meetings) — a new `companies` table, `meetings.company_id`/`company_source` (`'ai'`/`'manual'`). Inferred by Claude during extraction on **both** insight-generation paths (`extractInsights.ts` and the local-Claude-Code skill from 17.4, kept in sync so they can't drift apart), and always re-correctable by hand via a picker on the meeting page — a manual pick permanently locks out future auto-tagging for that meeting. Shown as a small logo badge (`CompanyTag.vue`, falling back to a colored-initials badge until a `{slug}.png` exists in `dashboard/public/logos/`) everywhere a meeting appears, plus a company filter on the Meetings page and Dashboard.
+
+### 17.7 Company-tagging follow-up fixes (2026-07-17, this session)
+
+A fresh whole-codebase review turned up a handful of rough edges in the brand-new company-tagging feature, fixed the same session:
+
+- `applyAiCompanyGuess` (`src/server/queries.ts`): the "manual always wins" check is now enforced atomically in the `UPDATE`'s own `WHERE` clause instead of a separate read-then-write (closes a race where a manual pick landing mid-reprocess could otherwise get silently overwritten). Also, an AI-sourced tag no longer regresses to untagged if a later reprocess comes back less confident — only a different resolved company guess, or Peter's manual override, can change an existing AI tag now (previously, a null/unrecognized guess on reprocess would silently clear a good prior guess). An unrecognized company slug now logs a warning instead of failing completely silently.
+- The company list was being fetched independently three times (Meetings page, its calendar panel, Dashboard) — consolidated into a shared `dashboard/src/composables/useCompanies.ts` (module-level cache, fetched once, reused everywhere).
+- Added an "Uncategorized" option to both company filter dropdowns (Meetings page, Dashboard), matching the per-meeting picker's existing option; added company badges to Dashboard's "Top Follow-ups This Week"/"Meetings Needing Approval" panels for consistency with every other view that shows a meeting.
+- Fixed a visual collision between a meeting's company badge and its review-status pill in the Meetings list view — the badge moved inline next to the meeting title instead of being absolute-positioned into the same corner as the pill.
+- Dropped `CompanyTag.vue`'s dead `.svg`-then-`.png` probe (no `.svg` logo files exist anywhere) — goes straight to `.png` now, one request per badge instead of a guaranteed 404 first.
+- Downsized the Asana "sent" icon asset from 2MB/7813px to a proper small file, and gave it a broken-image fallback (reverts to the generic `check_circle` icon it replaced, matching `CompanyTag`'s own graceful-degrade pattern).
+- Removed two now-dead CSS hook classes left over on the meeting page's company picker.
+- Peter explicitly deferred fixing the 4 non-square wordmark logos (Teachworthy, Teamalytics, Maisey, Galleria) rendering small at the current fixed 20×20 badge size — waiting on new square-cropped logo files rather than a component-level sizing change.
+
+Verification: `npx tsc --noEmit` (root) and `npx vue-tsc -b` + a scratch-`outDir` `vite build` (dashboard) both pass clean. Live-verified in an actual browser against Peter's own running dev servers and real Supabase data (not just typechecked) — the Meetings list/calendar view, Dashboard's stat panels and both company filters (including the new Uncategorized option), and the meeting page's company picker all confirmed working, with no console errors.
