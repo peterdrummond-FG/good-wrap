@@ -4,16 +4,23 @@
 // window — "yesterday" means the previous calendar date, matching how a
 // person would describe it.
 
-function startOfDay(d: Date): Date {
+export function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
 // Week starts Monday. "This week" excludes today/yesterday (they get their
 // own buckets) but still covers the rest of the current calendar week.
-function startOfWeek(d: Date): Date {
+// Exported for the Dashboard's Mon-Sun weekly stats (useDashboardStats.ts).
+export function startOfWeek(d: Date): Date {
   const day = d.getDay(); // 0 = Sunday
   const diffToMonday = day === 0 ? -6 : 1 - day;
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + diffToMonday);
+}
+
+// Local-calendar-day equality check — used by the Meetings screen's calendar
+// panel to filter the full meetings list down to whatever day is selected.
+export function isSameLocalDay(iso: string, date: Date): boolean {
+  return startOfDay(new Date(iso)).getTime() === startOfDay(date).getTime();
 }
 
 export type RecencyBucket = "today" | "yesterday" | "thisWeek" | "older";

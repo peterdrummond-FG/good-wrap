@@ -61,6 +61,7 @@ const currentUser = ref<CurrentUser | null>(null);
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: "space_dashboard" },
+  { to: "/meetings", label: "Meetings", icon: "event" },
   { to: "/capture", label: "Capture", icon: "add_circle" },
   { to: "/ask", label: "Ask", icon: "forum" },
   { to: "/people", label: "People", icon: "group" },
@@ -73,7 +74,6 @@ function isActive(to: string): boolean {
 
 const pageTitle = computed(() => {
   if (route.path === "/") return "Dashboard";
-  if (route.path.startsWith("/meetings/")) return "Meeting";
   if (route.path.startsWith("/people/")) return "Person";
   const match = navItems.find((i) => i.to !== "/" && route.path.startsWith(i.to));
   return match?.label ?? "good-wrap";

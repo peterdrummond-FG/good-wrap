@@ -310,6 +310,36 @@ body {
   font-style: italic;
 }
 
+/* --- Meetings screen layout (calendar panel + selected-meeting detail) --- */
+.bw-meetings-page {
+  height: calc(100vh - 50px);
+  min-height: 0;
+}
+.bw-meetings-layout {
+  height: 100%;
+  gap: 16px;
+}
+.bw-meetings-layout__calendar {
+  width: 360px;
+  flex-shrink: 0;
+  height: 100%;
+  min-height: 0;
+}
+.bw-meetings-layout__detail {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+  /* The selected meeting's content (takeaways + two review columns, each
+     free to grow with however many items are suggested) can be taller than
+     the viewport — this pane scrolls on its own rather than letting that
+     content overflow its fixed-height parent and visually cover whatever
+     comes after it (the transcript section), which is what a plain
+     height: 100% + no-overflow-handling column flex container would do. */
+  overflow-y: auto;
+}
+
 /* --- meeting detail review columns (added 2026-07-16) --------------------
    Takeaways/Action Items/Follow-ups shown side by side with checkboxes so
    Peter can quickly approve across categories without switching views. */

@@ -1,15 +1,16 @@
-// Shared state/logic behind MeetingDetail.vue's Action Items and Follow-ups
-// review columns — before this existed, the two were ~150 lines of
-// hand-duplicated (and easy to let drift) parallel state: a working copy of
-// that category's candidates, a dirty-tracking baseline snapshot, edit-mode
-// toggle, per-panel save, and reseed-from-server. Parametrized by category so
-// both columns share one implementation instead of two copies that only
-// differ in field shape (Follow-ups has `person`, Action Items doesn't) and
-// whether the list is urgency-sorted (Follow-ups is, Action Items isn't).
+// Shared state/logic behind MeetingActionItemsReview.vue and
+// MeetingFollowUpsReview.vue's review columns — before this existed, the two
+// were ~150 lines of hand-duplicated (and easy to let drift) parallel state:
+// a working copy of that category's candidates, a dirty-tracking baseline
+// snapshot, edit-mode toggle, per-panel save, and reseed-from-server.
+// Parametrized by category so both columns share one implementation instead
+// of two copies that only differ in field shape (Follow-ups has `person`,
+// Action Items doesn't) and whether the list is urgency-sorted (Follow-ups
+// is, Action Items isn't).
 //
-// Error handling and success/failure Notify toasts stay in MeetingDetail.vue
-// itself (page-level concerns) — `save()` here just does the state work and
-// lets a rejection propagate to the caller's own try/catch.
+// Error handling and success/failure Notify toasts stay in each of those
+// components (page-level concerns) — `save()` here just does the state work
+// and lets a rejection propagate to the caller's own try/catch.
 
 import { computed, reactive, ref, type Ref } from "vue";
 import { submitMeetingReview, type MeetingDetail, type SubmitReviewInput, type SubmitReviewResult } from "../api";

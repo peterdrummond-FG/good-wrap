@@ -1,6 +1,6 @@
 // Shared "medium date + short time" formatting, used anywhere a meeting's
-// startTime is shown as a full date+time (MeetingsPanel.vue's list row,
-// MeetingDetail.vue's header) — as opposed to MeetingsOverviewPanel's
+// startTime is shown as a full date+time (Dashboard.vue's list rows,
+// MeetingsView.vue's header) — as opposed to the Meetings calendar panel's
 // time-only formatting or dateBuckets.ts's recency bucketing, which have
 // their own display needs.
 

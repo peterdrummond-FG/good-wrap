@@ -1,8 +1,9 @@
-// Shared review-status pill styling, used by MeetingsPanel.vue (list view)
-// and MeetingDetail.vue (single-meeting view) — the pill *class* is
-// identical in both; the *label* text intentionally differs by context
-// ("Pending" reads fine scanning a list of many meetings, "Not processed" is
-// clearer when you're already looking at just the one).
+// Shared review-status pill styling, used by PersonDetail.vue's meetings
+// list and MeetingsView.vue's single-meeting header — the pill *class* is
+// identical in both (also used bare, with no label, on the Meetings
+// calendar panel's blocks); the *label* text intentionally differs by
+// context ("Pending" reads fine scanning a list of many meetings, "Not
+// processed" is clearer when you're already looking at just the one).
 
 import type { ReviewStatus } from "./api";
 
@@ -14,12 +15,12 @@ export function reviewStatusPillClass(status: ReviewStatus): string {
   }[status];
 }
 
-/** Label for the meetings list (MeetingsPanel.vue). */
+/** Label for the meetings list (PersonDetail.vue). */
 export function reviewStatusListLabel(status: ReviewStatus): string {
   return { pending: "Pending", needs_review: "Needs review", reviewed: "Reviewed" }[status];
 }
 
-/** Label for the single-meeting detail page (MeetingDetail.vue). */
+/** Label for the single-meeting detail view (MeetingsView.vue). */
 export function reviewStatusDetailLabel(status: ReviewStatus): string {
   return { pending: "Not processed", needs_review: "Needs review", reviewed: "Reviewed" }[status];
 }

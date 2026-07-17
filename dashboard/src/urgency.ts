@@ -2,8 +2,9 @@
 // replaces the earlier timing-based (Today/Tomorrow/This Week/...) grouping
 // 2026-07-16 per Peter's request: he wanted suggestions triaged by how
 // urgent they are, not by when the transcript implied they'd happen.
-// Centralized here since ActionItemsPanel.vue, FollowUpsPanel.vue, and
-// MeetingDetail.vue's review columns all need the same label/pill/sort logic.
+// Centralized here since Dashboard.vue's Top Follow-ups list and
+// MeetingFollowUpsReview.vue's review column all need the same
+// label/pill/sort logic.
 
 import type { Urgency } from "./api";
 
