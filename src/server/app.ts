@@ -283,11 +283,19 @@ export function buildApp() {
       source: "upload",
     });
 
+    // Lower embedding batch size, same fix and same reason as the
+    // "Reprocess meeting" route below: this backend runs on a
+    // memory-capped Railway plan that OOM-killed the container at the
+    // default batch size of 32 on a real (~36KB) transcript (hit live
+    // 2026-07-17 testing this route against a real folder-scan transcript).
+    // Folder-scan transcripts are full meeting recordings, the same class
+    // of content as a manual reprocess, so the same mitigation applies.
     const { insightsId, chunkCount } = await persistMeetingInsights(
       result.meetingId,
       result.transcriptId,
       body.transcript,
-      insights
+      insights,
+      { embedBatchSize: 8 }
     );
 
     const meeting = await getMeetingDetail(result.meetingId);
