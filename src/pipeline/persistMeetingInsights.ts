@@ -39,7 +39,11 @@ export async function persistMeetingInsights(
   meetingId: string,
   transcriptId: string,
   rawText: string,
-  insights: ExtractInsightsResult,
+  // companySlug is deliberately NOT part of this shape — company tagging is
+  // a separate concern (applyAiCompanyGuess in queries.ts), applied by the
+  // caller after this persists, since it must respect a prior manual tag
+  // that this function has no reason to know about.
+  insights: Pick<ExtractInsightsResult, "keywords" | "takeaways" | "actionItems" | "followUps">,
   options: PersistMeetingInsightsOptions = {}
 ): Promise<PersistMeetingInsightsResult> {
   const chunks = chunkTranscript(rawText);

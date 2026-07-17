@@ -41,6 +41,10 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
    - `curl -s "<GOODWRAP_API_BASE_URL>/api/people"` → known contacts from past
      meetings, for attributing a follow-up to someone mentioned but not
      present in the current meeting.
+   - `curl -s "<GOODWRAP_API_BASE_URL>/api/companies"` → every known Flippen
+     Group company (including "Flippen Group" itself, `isInternal: true`),
+     each with a `slug`, `name`, and `aliases` — for classifying which
+     company each meeting is about (see the **company** rule below).
 
 3. For each candidate filename, one at a time:
 
@@ -107,6 +111,18 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
         both actionItems and followUps; under-generating is worse than
         over-generating for these two categories (not for takeaways, which
         stays exactly 5).
+      - **company**: which ONE of the companies from `/api/companies` (step
+        2) this meeting is actually about — use its `slug`. Match on the
+        company's `name`, its `aliases`, attendee affiliations, or clear
+        subject-matter context (e.g. product/program names unique to one
+        company), not just a passing one-word mention. If the meeting is
+        Flippen Group's own internal business (not about running any one
+        portfolio company specifically), use whichever entry has
+        `isInternal: true`. Use `"unknown"` only when the transcript
+        genuinely gives no usable signal either way — prefer a genuine best
+        guess over defaulting to unknown. This never overrides a company
+        Peter has already set by hand on the meeting detail page (the
+        server enforces that, not this skill).
 
    c. POST the result (using the literal base URL and key read in step 0,
       not shell variable references):
@@ -114,7 +130,7 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       curl -s -X POST "<GOODWRAP_API_BASE_URL>/api/meetings/upload-processed" \
         -H "Content-Type: application/json" \
         -H "x-worker-key: <LOCAL_WORKER_API_KEY>" \
-        -d '{"topic": "...", "startTime": "...", "durationMinutes": ..., "participants": [...], "transcript": "...", "insights": {"keywords": [...], "takeaways": [{"text": "..."}], "actionItems": [{"text": "...", "urgency": "..."}], "followUps": [{"text": "...", "person": null, "urgency": "..."}]}}'
+        -d '{"topic": "...", "startTime": "...", "durationMinutes": ..., "participants": [...], "transcript": "...", "insights": {"keywords": [...], "takeaways": [{"text": "..."}], "actionItems": [{"text": "...", "urgency": "..."}], "followUps": [{"text": "...", "person": null, "urgency": "..."}], "company": "some-slug-or-unknown"}}'
       ```
       (`takeaways`/`actionItems`/`followUps` entries take no `approved`
       field — the server stamps that itself.) Write the JSON body to a temp

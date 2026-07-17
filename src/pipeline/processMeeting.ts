@@ -17,7 +17,7 @@ import { extractInsights } from "./extractInsights";
 import { persistMeetingInsights } from "./persistMeetingInsights";
 import { loadMeetingContext } from "./meetingContext";
 import { mergeApprovedForward } from "./mergeApprovedForward";
-import { getMeetingDetail } from "../server/queries";
+import { applyAiCompanyGuess, getMeetingDetail } from "../server/queries";
 
 export interface ProcessMeetingResult {
   meetingId: string;
@@ -44,7 +44,7 @@ export async function processMeeting(
   if (!context) {
     throw new Error(`No meeting found for id ${meetingId}`);
   }
-  const { meeting, transcript, owner, participantNames, participants, knownPeopleNames } = context;
+  const { meeting, transcript, owner, participantNames, participants, knownPeopleNames, companies } = context;
 
   // Capture whatever's currently approved before Claude generates a fresh
   // candidate set, so a reprocess can carry real review work forward instead
@@ -63,6 +63,7 @@ export async function processMeeting(
     participantNames,
     ownerName: owner.name,
     knownPeopleNames,
+    companies,
   });
 
   // Takeaways are auto-approved with no review step (see
@@ -84,6 +85,11 @@ export async function processMeeting(
     { keywords: insights.keywords, takeaways: insights.takeaways, actionItems, followUps },
     { embedBatchSize: options.embedBatchSize }
   );
+
+  // Never overwrites a manual tag (see applyAiCompanyGuess) — a reprocess
+  // that changes its mind about the company shouldn't silently undo a
+  // correction Peter already made on the meeting detail page.
+  await applyAiCompanyGuess(meetingId, insights.companySlug);
 
   return { meetingId, insightsId, chunkCount };
 }

@@ -24,6 +24,24 @@
                 <span class="bw-pill" :class="pillClass(meeting.reviewStatus)">{{
                   reviewStatusLabel(meeting.reviewStatus)
                 }}</span>
+                <q-btn-dropdown flat dense no-caps content-class="bw-company-menu" class="bw-company-picker">
+                  <template #label>
+                    <span class="row items-center q-gutter-xs">
+                      <CompanyTag v-if="meeting.company" :company="meeting.company" />
+                      <span class="text-caption text-grey-6">{{ meeting.company?.name ?? "Tag company" }}</span>
+                    </span>
+                  </template>
+                  <q-list>
+                    <q-item clickable v-close-popup @click="onSetCompany(null)">
+                      <q-item-section>Uncategorized</q-item-section>
+                    </q-item>
+                    <q-separator />
+                    <q-item v-for="c in companies" :key="c.id" clickable v-close-popup @click="onSetCompany(c.id)">
+                      <q-item-section avatar><CompanyTag :company="c" /></q-item-section>
+                      <q-item-section>{{ c.name }}</q-item-section>
+                    </q-item>
+                  </q-list>
+                </q-btn-dropdown>
               </div>
               <div class="row q-gutter-sm">
                 <q-btn
@@ -125,10 +143,13 @@ import { useRoute, useRouter } from "vue-router";
 import { Dialog, Notify } from "quasar";
 import {
   deleteMeeting,
+  fetchCompanies,
   fetchMeetingDetail,
   fetchMeetings,
   processMeeting,
   regenerateInsightCategory,
+  setMeetingCompany,
+  type Company,
   type MeetingDetail,
   type MeetingListItem,
 } from "../api";
@@ -137,6 +158,7 @@ import { isSameLocalDay, startOfDay } from "../dateBuckets";
 import { formatMeetingDateTime as formatDate } from "../formatDate";
 import { reviewStatusDetailLabel as reviewStatusLabel, reviewStatusPillClass as pillClass } from "../reviewStatus";
 import PersonTag from "../components/PersonTag.vue";
+import CompanyTag from "../components/CompanyTag.vue";
 import MeetingsCalendarPanel from "../components/MeetingsCalendarPanel.vue";
 import MeetingTakeawaysStrip from "../components/MeetingTakeawaysStrip.vue";
 import MeetingActionItemsReview from "../components/MeetingActionItemsReview.vue";
@@ -154,6 +176,8 @@ const { data: meetings, loading: meetingsLoading, refetch: refetchMeetings } = u
   async () => (await fetchMeetings()).meetings,
   [] as MeetingListItem[]
 );
+
+const { data: companies } = useAsyncList(async () => (await fetchCompanies()).companies, [] as Company[]);
 
 const selectedDate = ref<Date>(startOfDay(new Date()));
 const selectedMeetingId = ref<string | null>(props.id ?? null);
@@ -232,6 +256,16 @@ function onDateChange(date: Date) {
     selectedMeetingId.value = null;
     meeting.value = null;
     if (props.id) router.push("/meetings").catch(() => {});
+  }
+}
+
+async function onSetCompany(companyId: string | null) {
+  if (!meeting.value) return;
+  try {
+    const result = await setMeetingCompany(meeting.value.id, companyId);
+    onMeetingUpdated(result.meeting);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
   }
 }
 

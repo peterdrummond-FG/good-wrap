@@ -38,7 +38,7 @@ export async function regenerateInsightCategory(
   // can't drift out of sync on how any of this is resolved.
   const context = await loadMeetingContext(meetingId);
   if (!context) return null;
-  const { meeting, transcript, owner, participantNames, participants, knownPeopleNames } = context;
+  const { meeting, transcript, owner, participantNames, participants, knownPeopleNames, companies } = context;
 
   // Capture what's currently approved in the targeted category so it isn't
   // lost when it's replaced below — see mergeApprovedForward.
@@ -52,7 +52,11 @@ export async function regenerateInsightCategory(
     participantNames,
     ownerName: owner.name,
     knownPeopleNames,
+    companies,
   });
+  // fresh.companySlug is deliberately discarded — regenerating one category
+  // (takeaways/actionItems/followUps) doesn't touch the meeting's company
+  // tag, same as it doesn't touch the other two categories.
 
   switch (category) {
     case "takeaways": {

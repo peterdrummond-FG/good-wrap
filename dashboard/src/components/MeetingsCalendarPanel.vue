@@ -1,7 +1,29 @@
 <template>
   <div class="bw-panel column">
     <div class="bw-panel__header column no-wrap">
-      <div class="bw-panel__title">Meetings</div>
+      <div class="row items-center justify-between no-wrap">
+        <div class="bw-panel__title">Meetings</div>
+        <q-select
+          v-model="selectedCompanyId"
+          dense
+          borderless
+          emit-value
+          map-options
+          clearable
+          options-dense
+          class="bw-company-filter"
+          :options="companyFilterOptions"
+        >
+          <!-- Quasar's `placeholder` prop renders via CSS on q-select and
+               doesn't reserve real layout width here (dense + borderless +
+               no v-model collapses the field down to just the dropdown
+               icon) — an explicit #selected slot guarantees visible text
+               either way, selected or not. -->
+          <template #selected>
+            {{ selectedCompanyLabel }}
+          </template>
+        </q-select>
+      </div>
       <div class="bw-panel__subtitle">{{ formattedSelectedRange }}</div>
 
       <!-- Consolidated into one row (Peter's ask, 2026-07-16): scope toggle,
@@ -100,6 +122,7 @@
               :style="{ top: `${m.top}px`, height: `${m.height}px` }"
               @click="$emit('select', m.id)"
             >
+              <CompanyTag v-if="m.company" :company="m.company" class="bw-calendar-block__company" />
               <div class="bw-calendar-block__time">{{ formatTime(m.startTime) }}</div>
               <div class="bw-calendar-block__title">{{ m.topic }}</div>
             </button>
@@ -121,6 +144,7 @@
               :class="{ 'bw-list-row--selected': m.id === selectedMeetingId }"
               @click="$emit('select', m.id)"
             >
+              <CompanyTag v-if="m.company" :company="m.company" class="bw-list-row__company" />
               <div class="row items-center justify-between no-wrap">
                 <div class="col">
                   <div class="bw-row__title">{{ m.topic }}</div>
@@ -142,15 +166,31 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { MeetingListItem, ReviewStatus } from "../api";
+import { fetchCompanies, type Company, type MeetingListItem, type ReviewStatus } from "../api";
+import { useAsyncList } from "../composables/useAsyncList";
 import { isSameLocalDay, startOfDay, startOfWeek } from "../dateBuckets";
 import { reviewStatusListLabel, reviewStatusPillClass } from "../reviewStatus";
+import CompanyTag from "./CompanyTag.vue";
 
 const props = defineProps<{
   meetings: MeetingListItem[];
   selectedDate: Date;
   selectedMeetingId: string | null;
 }>();
+
+// Company filter (added 2026-07-17) — lets Peter see all meetings for one
+// portfolio company at a glance, both in Calendar and List mode.
+const { data: companies } = useAsyncList(async () => (await fetchCompanies()).companies, [] as Company[]);
+const selectedCompanyId = ref<string | null>(null);
+const companyFilterOptions = computed(() => companies.value.map((c) => ({ label: c.name, value: c.id })));
+const selectedCompanyLabel = computed(
+  () => companies.value.find((c) => c.id === selectedCompanyId.value)?.name ?? "All companies"
+);
+const filteredMeetings = computed(() =>
+  selectedCompanyId.value
+    ? props.meetings.filter((m) => m.company?.id === selectedCompanyId.value)
+    : props.meetings
+);
 
 const emit = defineEmits<{
   (e: "update:selectedDate", date: Date): void;
@@ -288,7 +328,7 @@ function emitDate(date: Date) {
 }
 
 const dayMeetings = computed(() =>
-  props.meetings
+  filteredMeetings.value
     .filter((m) => isSameLocalDay(m.startTime, props.selectedDate))
     .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
 );
@@ -392,7 +432,7 @@ const weekMeetings = computed(() => {
   const end = new Date(weekStart.value);
   end.setDate(end.getDate() + 7);
   const endTime = end.getTime();
-  return props.meetings
+  return filteredMeetings.value
     .filter((m) => {
       const t = startOfDay(new Date(m.startTime)).getTime();
       return t >= start && t < endTime;
@@ -426,6 +466,10 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
 </script>
 
 <style scoped>
+.bw-company-filter {
+  max-width: 140px;
+  font-size: 0.75rem;
+}
 /* Hand-built mini month calendar (replaces Quasar's q-date, 2026-07-16) —
    Peter's ask was for it to fill the panel's full width, which q-date never
    did (its day-cell buttons are a fixed pixel size, not width-relative, so
@@ -536,6 +580,11 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   outline: 2px solid var(--q-primary);
   outline-offset: 1px;
 }
+.bw-calendar-block__company {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+}
 .bw-calendar-block__time {
   font-size: 0.68rem;
   font-weight: 600;
@@ -545,6 +594,7 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   font-size: 0.8rem;
   font-weight: 600;
   color: #fff;
+  padding-right: 22px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -552,6 +602,7 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
 
 /* --- list mode rows (button reset — .bw-row is normally a block/link) ---- */
 .bw-list-row {
+  position: relative;
   display: block;
   width: 100%;
   border: none;
@@ -562,5 +613,10 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
 .bw-list-row--selected {
   outline: 2px solid var(--q-primary);
   outline-offset: 1px;
+}
+.bw-list-row__company {
+  position: absolute;
+  top: 8px;
+  right: 10px;
 }
 </style>

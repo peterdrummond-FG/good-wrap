@@ -1,5 +1,26 @@
 <template>
   <q-page class="q-pa-md">
+    <div class="row items-center justify-end q-mb-sm">
+      <q-select
+        v-model="selectedCompanyId"
+        dense
+        outlined
+        emit-value
+        map-options
+        clearable
+        options-dense
+        style="min-width: 200px"
+        :options="companyOptions"
+      >
+        <!-- See MeetingsCalendarPanel.vue's identical #selected slot comment
+             — an explicit slot avoids relying on the `placeholder` prop's
+             CSS-only rendering, which doesn't reserve visible width here. -->
+        <template #selected>
+          {{ selectedCompanyLabel }}
+        </template>
+      </q-select>
+    </div>
+
     <div class="row q-col-gutter-md q-mb-md">
       <div class="col-12 col-sm-6 col-md-3">
         <StatTile label="Needs Approval" :value="needsApprovalCount" sublabel="meetings awaiting review" />
@@ -78,11 +99,23 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { useDashboardStats } from "../composables/useDashboardStats";
+import { fetchCompanies, type Company } from "../api";
+import { useAsyncList } from "../composables/useAsyncList";
 import { urgencyLabel, urgencyPillClass } from "../urgency";
 import { formatMeetingDateTime as formatDate } from "../formatDate";
 import PersonTag from "../components/PersonTag.vue";
 import StatTile from "../components/StatTile.vue";
+
+// Company filter (added 2026-07-17) — scopes every stat/list on this page to
+// one portfolio company at a glance.
+const { data: companies } = useAsyncList(async () => (await fetchCompanies()).companies, [] as Company[]);
+const selectedCompanyId = ref<string | null>(null);
+const companyOptions = computed(() => companies.value.map((c) => ({ label: c.name, value: c.id })));
+const selectedCompanyLabel = computed(
+  () => companies.value.find((c) => c.id === selectedCompanyId.value)?.name ?? "All companies"
+);
 
 const {
   loading,
@@ -92,5 +125,5 @@ const {
   overdueCount,
   topFollowUpsThisWeek,
   meetingsNeedingApproval,
-} = useDashboardStats();
+} = useDashboardStats(selectedCompanyId);
 </script>

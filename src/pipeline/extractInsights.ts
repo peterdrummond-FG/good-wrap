@@ -55,6 +55,12 @@ export interface ExtractInsightsInput {
   // path for inventing a person record for a name never seen before — if
   // there's no match here, `person` should come back null.
   knownPeopleNames: string[];
+  // Known Flippen Group portfolio companies (plus "Flippen Group" itself,
+  // isInternal: true) to classify this meeting against — added 2026-07-17,
+  // see db/schema.ts's companies comment. The tool schema's `company` enum
+  // is built from this list at call time, so a company added to the DB
+  // later is recognized without a code change.
+  companies: { slug: string; name: string; aliases: string[]; isInternal: boolean }[];
 }
 
 // Action items/follow-ups are suggest-then-approve (2026-07-16) — Claude
@@ -73,6 +79,11 @@ export interface ExtractInsightsResult {
   takeaways: SuggestionItem[];
   actionItems: ActionItem[];
   followUps: FollowUpItem[];
+  // The matched company's slug, or null if Claude couldn't confidently tell
+  // which of the known companies (or Flippen Group internally) this meeting
+  // concerns — see applyAiCompanyGuess in queries.ts for how this is applied
+  // (never overwrites a manual pick).
+  companySlug: string | null;
 }
 
 // Raw shapes Claude's tool call returns, before `approved: false` is stamped
@@ -85,6 +96,7 @@ interface RawExtractionResult {
   takeaways?: string[];
   actionItems?: RawActionItem[];
   followUps?: RawFollowUp[];
+  company?: string;
 }
 
 // Shared urgency schema fragment — identical for action items and follow-ups.
@@ -99,15 +111,22 @@ const URGENCY_PROPERTY = {
     "default for everything else — don't force high or low without a real signal.",
 };
 
-const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
-  name: "record_meeting_notes",
-  description:
-    "Record the extracted keywords, takeaways, action items, and follow-ups for this meeting " +
-    "transcript.",
-  input_schema: {
-    type: "object",
-    properties: {
-      keywords: {
+const UNKNOWN_COMPANY = "unknown";
+
+// Built per-call (not a static const) since the enum of valid slugs depends
+// on ExtractInsightsInput.companies, which is read from the DB and can grow
+// over time (Peter: "other companies may have to be added later") — a new
+// row is recognized immediately, no code change needed.
+function buildRecordInsightsTool(companies: ExtractInsightsInput["companies"]): Anthropic.Tool {
+  return {
+    name: "record_meeting_notes",
+    description:
+      "Record the extracted keywords, takeaways, action items, follow-ups, and company for this " +
+      "meeting transcript.",
+    input_schema: {
+      type: "object",
+      properties: {
+        keywords: {
         type: "array",
         items: { type: "string" },
         description:
@@ -182,17 +201,37 @@ const RECORD_INSIGHTS_TOOL: Anthropic.Tool = {
           "5-8 candidate follow-ups for a human to review and pick from — things other people " +
           "need to do, or unconfirmed items worth a reminder.",
       },
+      company: {
+        type: "string",
+        enum: [...companies.map((c) => c.slug), UNKNOWN_COMPANY],
+        description:
+          "Which of the known companies this meeting is about, by slug. Use " +
+          `"${UNKNOWN_COMPANY}" only if the transcript gives no real signal either way — ` +
+          "prefer a genuine best guess over defaulting to unknown.",
+      },
     },
-    required: ["keywords", "takeaways", "actionItems", "followUps"],
-  },
-};
+      required: ["keywords", "takeaways", "actionItems", "followUps", "company"],
+    },
+  };
+}
 
-const SYSTEM_PROMPT =
-  "You extract structured notes from a meeting transcript. Ground every point in what was " +
-  "actually said — don't infer motivation, diagnose, or invent details not present in the " +
-  "text. The user message names the meeting owner.\n\n" +
-  "Four categories, each with its own rule:\n" +
-  "- keywords: 5-10 short topical keywords or phrases capturing what this meeting was about.\n" +
+// Built per-call, same reason as buildRecordInsightsTool above — the list of
+// companies to classify against, and their aliases, comes from the DB.
+function buildSystemPrompt(companies: ExtractInsightsInput["companies"]): string {
+  const companyLines = companies
+    .map((c) => {
+      const aliasNote = c.aliases.length ? ` (aka ${c.aliases.join(", ")})` : "";
+      const internalNote = c.isInternal ? " — this is Flippen Group's OWN internal/corporate entity" : "";
+      return `  - ${c.slug}: ${c.name}${aliasNote}${internalNote}`;
+    })
+    .join("\n");
+
+  return (
+    "You extract structured notes from a meeting transcript. Ground every point in what was " +
+    "actually said — don't infer motivation, diagnose, or invent details not present in the " +
+    "text. The user message names the meeting owner.\n\n" +
+    "Five categories, each with its own rule:\n" +
+    "- keywords: 5-10 short topical keywords or phrases capturing what this meeting was about.\n" +
   "- takeaways: exactly 5 FINAL decisions or important context, shown to the user directly with " +
   "no further filtering afterward — pick the 5 that genuinely matter most; don't pad out to 5 " +
   "with marginal ones if fewer than 5 clearly stand out.\n" +
@@ -225,7 +264,17 @@ const SYSTEM_PROMPT =
   "transcript specifically for the owner's first-person language before settling on a short " +
   "list. actionItems and followUps are candidates, not a final list — always produce the " +
   "requested 5-8 for each even if some entries end up more marginal than others; " +
-  "under-generating is worse than over-generating for these two categories (not for takeaways).";
+  "under-generating is worse than over-generating for these two categories (not for takeaways).\n\n" +
+  "- company: which ONE of the following companies (Flippen Group owns all of them) this " +
+  "meeting is actually about, by slug:\n" +
+  `${companyLines}\n` +
+  "Match on the company name, its alias(es), attendee affiliations, or clear subject-matter " +
+  "context (e.g. product/program names unique to one company) — not just a passing one-word " +
+  "mention. If the meeting is Flippen Group's own internal business (not about running any " +
+  `one portfolio company specifically), use whichever slug above is marked internal. Use ` +
+  `"${UNKNOWN_COMPANY}" only when the transcript genuinely gives no usable signal either way.`
+  );
+}
 
 // Forced tool-use is supposed to guarantee the declared shape, but it's not
 // a hard guarantee — hit live (2026-07-16) where Claude returned a field as
@@ -256,8 +305,8 @@ async function callExtraction(input: ExtractInsightsInput, model: string): Promi
       const message = await getClaudeClient().messages.create({
         model,
         max_tokens: 2048,
-        system: SYSTEM_PROMPT,
-        tools: [RECORD_INSIGHTS_TOOL],
+        system: buildSystemPrompt(input.companies),
+        tools: [buildRecordInsightsTool(input.companies)],
         tool_choice: { type: "tool", name: "record_meeting_notes" },
         messages: [
           {
@@ -291,6 +340,7 @@ async function callExtraction(input: ExtractInsightsInput, model: string): Promi
           ...item,
           approved: false,
         })),
+        companySlug: result.company && result.company !== UNKNOWN_COMPANY ? result.company : null,
       };
     },
     {

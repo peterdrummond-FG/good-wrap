@@ -12,6 +12,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import {
+  applyAiCompanyGuess,
   deleteActionItem,
   deleteFollowUp,
   deleteMeeting,
@@ -19,12 +20,14 @@ import {
   getMeetingDetail,
   getPersonDetail,
   listActionItems,
+  listCompanies,
   listFollowUps,
   listMeetings,
   listPeople,
   sendActionItemToAsana,
   setActionItemDone,
   setFollowUpDone,
+  setMeetingCompany,
   updateMeeting,
   updateMeetingInsights,
   type UpdateMeetingInput,
@@ -165,6 +168,13 @@ export function buildApp() {
     return reply.send({ meetings });
   });
 
+  // Known companies (including "Flippen Group" itself) — powers the meeting
+  // detail page's tag picker. See db/schema.ts's companies comment.
+  app.get("/api/companies", async (_req, reply) => {
+    const companies = await listCompanies();
+    return reply.send({ companies });
+  });
+
   app.get("/api/followups", async (_req, reply) => {
     // Both lists are approved-only (see queries.ts) — unapproved suggestions
     // only ever surface on the meeting detail page's review UI.
@@ -297,6 +307,9 @@ export function buildApp() {
       insights,
       { embedBatchSize: 8 }
     );
+    // A fresh capture never has a manual company tag yet, so this always
+    // applies — see applyAiCompanyGuess's "manual always wins" guard.
+    await applyAiCompanyGuess(result.meetingId, insights.companySlug);
 
     const meeting = await getMeetingDetail(result.meetingId);
     return reply.code(201).send({ ...result, insightsId, chunkCount, meeting });
@@ -306,6 +319,22 @@ export function buildApp() {
     "/api/meetings/:id",
     async (req, reply) => {
       const found = await updateMeeting(req.params.id, req.body ?? {});
+      if (!found) {
+        return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
+      }
+      const meeting = await getMeetingDetail(req.params.id);
+      return reply.send({ meeting });
+    }
+  );
+
+  // Manual re-tag/correction — always wins over Claude's own guess from here
+  // on (see setMeetingCompany/applyAiCompanyGuess in queries.ts). Pass
+  // companyId: null to clear the tag entirely (still counts as a manual
+  // decision, so a later reprocess won't silently re-tag it).
+  app.patch<{ Params: { id: string }; Body: { companyId: string | null } }>(
+    "/api/meetings/:id/company",
+    async (req, reply) => {
+      const found = await setMeetingCompany(req.params.id, req.body?.companyId ?? null);
       if (!found) {
         return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
       }

@@ -7,6 +7,89 @@ import type { ActionItem, FollowUpItem, SuggestionItem, Urgency } from "../../db
 import { resolveParticipantIds, type CaptureParticipantInput } from "../ingest/captureManualMeeting";
 import { createAsanaTask } from "../integrations/asana";
 
+// --- companies (added 2026-07-17, see db/schema.ts's companies comment) ----------
+
+export interface CompanyListItem {
+  id: string;
+  name: string;
+  slug: string;
+  aliases: string[];
+  isInternal: boolean;
+}
+
+/** Every known company (including "Flippen Group" itself), for the meeting
+ * detail page's tag picker and for extraction's classification prompt. */
+export async function listCompanies(): Promise<CompanyListItem[]> {
+  const rows = await db
+    .select({
+      id: schema.companies.id,
+      name: schema.companies.name,
+      slug: schema.companies.slug,
+      aliases: schema.companies.aliases,
+      isInternal: schema.companies.isInternal,
+    })
+    .from(schema.companies)
+    .orderBy(schema.companies.name);
+  return rows.map((r) => ({ ...r, aliases: r.aliases ?? [] }));
+}
+
+export interface CompanyRef {
+  id: string;
+  name: string;
+  slug: string;
+}
+
+/** Manual re-tag from the meeting detail page — always wins going forward.
+ * Passing companyId: null explicitly clears the tag (still counts as a
+ * manual decision, so automatic reprocessing won't re-guess it back).
+ * Returns false if no meeting exists with this id (caller should 404). */
+export async function setMeetingCompany(meetingId: string, companyId: string | null): Promise<boolean> {
+  const [existing] = await db
+    .select({ id: schema.meetings.id })
+    .from(schema.meetings)
+    .where(eq(schema.meetings.id, meetingId))
+    .limit(1);
+  if (!existing) return false;
+
+  await db
+    .update(schema.meetings)
+    .set({ companyId, companySource: "manual" })
+    .where(eq(schema.meetings.id, meetingId));
+  return true;
+}
+
+/**
+ * Applies Claude's own company guess from a (re)process — but ONLY if the
+ * meeting hasn't been manually tagged already (companySource === "manual"
+ * always wins, see db/schema.ts). `companySlug` is `null`/unrecognized when
+ * Claude couldn't confidently classify the meeting, which clears any prior
+ * AI guess rather than leaving a stale one in place. No-op if the meeting
+ * doesn't exist (callers already know it does, having just processed it).
+ */
+export async function applyAiCompanyGuess(meetingId: string, companySlug: string | null): Promise<void> {
+  const [meeting] = await db
+    .select({ companySource: schema.meetings.companySource })
+    .from(schema.meetings)
+    .where(eq(schema.meetings.id, meetingId))
+    .limit(1);
+  if (!meeting || meeting.companySource === "manual") return;
+
+  let companyId: string | null = null;
+  if (companySlug) {
+    const [company] = await db
+      .select({ id: schema.companies.id })
+      .from(schema.companies)
+      .where(eq(schema.companies.slug, companySlug))
+      .limit(1);
+    companyId = company?.id ?? null;
+  }
+
+  await db
+    .update(schema.meetings)
+    .set({ companyId, companySource: companyId ? "ai" : null })
+    .where(eq(schema.meetings.id, meetingId));
+}
+
 // Three-state status the dashboard badges key off (added 2026-07-16 with the
 // suggest-then-approve workflow — see db/schema.ts's meeting_insights comment).
 // "reviewed" now requires BOTH action items and follow-ups to have been
@@ -165,6 +248,8 @@ export interface MeetingListItem {
   // so unlike takeaways these are shown as-is. Added so the Meetings list can
   // search on them, not just the topic text.
   keywords: string[];
+  /** Null until AI-classified or manually tagged — see companies table. */
+  company: CompanyRef | null;
 }
 
 export async function listMeetings(): Promise<MeetingListItem[]> {
@@ -175,8 +260,12 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
       startTime: schema.meetings.startTime,
       durationMinutes: schema.meetings.durationMinutes,
       source: schema.meetings.source,
+      companyId: schema.meetings.companyId,
+      companyName: schema.companies.name,
+      companySlug: schema.companies.slug,
     })
     .from(schema.meetings)
+    .leftJoin(schema.companies, eq(schema.companies.id, schema.meetings.companyId))
     .orderBy(desc(schema.meetings.startTime));
 
   if (meetings.length === 0) return [];
@@ -227,12 +316,13 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
     participantsByMeeting.set(row.meetingId, list);
   }
 
-  return meetings.map((m) => ({
+  return meetings.map(({ companyId, companyName, companySlug, ...m }) => ({
     ...m,
     participants: participantsByMeeting.get(m.id) ?? [],
     reviewStatus: reviewStatusByMeeting.get(m.id) ?? "pending",
     topTakeaways: takeawaysByMeeting.get(m.id) ?? [],
     keywords: keywordsByMeeting.get(m.id) ?? [],
+    company: companyId && companyName && companySlug ? { id: companyId, name: companyName, slug: companySlug } : null,
   }));
 }
 
@@ -245,6 +335,10 @@ export interface MeetingDetail {
   participants: string[];
   transcript: string | null;
   reviewStatus: ReviewStatus;
+  company: CompanyRef | null;
+  /** Null until a company is first set. "manual" once Peter has ever
+   * corrected/picked it — see applyAiCompanyGuess in this file. */
+  companySource: "ai" | "manual" | null;
   insights: {
     keywords: string[];
     // takeaways: always all approved:true (no review step — see
@@ -261,12 +355,18 @@ export interface MeetingDetail {
 }
 
 export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail | null> {
-  const [meeting] = await db
-    .select()
+  const [row] = await db
+    .select({
+      meeting: schema.meetings,
+      companyName: schema.companies.name,
+      companySlug: schema.companies.slug,
+    })
     .from(schema.meetings)
+    .leftJoin(schema.companies, eq(schema.companies.id, schema.meetings.companyId))
     .where(eq(schema.meetings.id, meetingId))
     .limit(1);
-  if (!meeting) return null;
+  if (!row) return null;
+  const { meeting, companyName, companySlug } = row;
 
   const participantRows = await db
     .select({ name: schema.people.name, email: schema.people.email })
@@ -295,6 +395,11 @@ export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail
     source: meeting.source,
     participants: participantRows.map((p) => p.name ?? p.email ?? "Unknown"),
     transcript: transcript?.rawText ?? null,
+    company:
+      meeting.companyId && companyName && companySlug
+        ? { id: meeting.companyId, name: companyName, slug: companySlug }
+        : null,
+    companySource: meeting.companySource,
     reviewStatus: computeReviewStatus(
       Boolean(insights),
       insights?.actionItemsReviewedAt ?? null,

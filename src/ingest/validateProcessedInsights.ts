@@ -17,6 +17,12 @@ export interface ProcessedInsightsInput {
   takeaways?: unknown;
   actionItems?: unknown;
   followUps?: unknown;
+  // Company slug Claude Code classified this meeting as (or "unknown"/absent
+  // — see SKILL.md's company rule and db/schema.ts's companies comment).
+  // Not validated against the live companies table here — applyAiCompanyGuess
+  // (queries.ts) treats an unrecognized slug the same as no match at all, so
+  // there's nothing unsafe about passing an arbitrary string through.
+  company?: unknown;
 }
 
 const URGENCIES: Urgency[] = ["high", "medium", "low"];
@@ -80,5 +86,10 @@ export function validateProcessedInsights(input: ProcessedInsightsInput): Extrac
     };
   });
 
-  return { keywords, takeaways, actionItems, followUps };
+  const companySlug =
+    typeof input.company === "string" && input.company.trim() && input.company !== "unknown"
+      ? input.company.trim()
+      : null;
+
+  return { keywords, takeaways, actionItems, followUps, companySlug };
 }

@@ -4,7 +4,7 @@
 // same "personal scale, just filter in the browser" approach as
 // MeetingsOverviewPanel's bucketByRecency.
 
-import { computed } from "vue";
+import { computed, type Ref } from "vue";
 import {
   fetchFollowUps,
   fetchMeetings,
@@ -29,7 +29,12 @@ export interface CategoryWeekStats {
   done: number;
 }
 
-export function useDashboardStats() {
+// companyId: optional filter (added 2026-07-17) — when set, every stat/list
+// below is scoped to meetings tagged with that one company. followUpData
+// items don't carry their own company field, so they're matched via
+// meetingCompanyById below (built off the same `meetings` list this
+// composable already fetches).
+export function useDashboardStats(companyId?: Ref<string | null>) {
   const {
     data: meetings,
     loading: meetingsLoading,
@@ -44,6 +49,21 @@ export function useDashboardStats() {
     followUps: [] as FollowUpWithMeeting[],
     actionItems: [] as ActionItemWithMeeting[],
   });
+
+  const meetingCompanyById = computed(() => new Map(meetings.value.map((m) => [m.id, m.company?.id ?? null])));
+
+  function matchesCompanyFilter(meetingId: string): boolean {
+    if (!companyId?.value) return true;
+    return meetingCompanyById.value.get(meetingId) === companyId.value;
+  }
+
+  const scopedMeetings = computed(() =>
+    companyId?.value ? meetings.value.filter((m) => m.company?.id === companyId.value) : meetings.value
+  );
+  const scopedFollowUps = computed(() => followUpData.value.followUps.filter((f) => matchesCompanyFilter(f.meetingId)));
+  const scopedActionItems = computed(() =>
+    followUpData.value.actionItems.filter((a) => matchesCompanyFilter(a.meetingId))
+  );
 
   const loading = computed(() => meetingsLoading.value || followUpsLoading.value);
   const error = computed(() => meetingsError.value || followUpsError.value);
@@ -66,10 +86,10 @@ export function useDashboardStats() {
     return { total: thisWeek.length, open: thisWeek.length - done, done };
   }
 
-  const needsApprovalMeetings = computed(() => meetings.value.filter((m) => m.reviewStatus === "needs_review"));
+  const needsApprovalMeetings = computed(() => scopedMeetings.value.filter((m) => m.reviewStatus === "needs_review"));
 
-  const actionItemsThisWeek = computed(() => toWeekStats(followUpData.value.actionItems));
-  const followUpsThisWeek = computed(() => toWeekStats(followUpData.value.followUps));
+  const actionItemsThisWeek = computed(() => toWeekStats(scopedActionItems.value));
+  const followUpsThisWeek = computed(() => toWeekStats(scopedFollowUps.value));
 
   const overdueCutoff = new Date();
   overdueCutoff.setDate(overdueCutoff.getDate() - OVERDUE_DAYS);
@@ -79,13 +99,11 @@ export function useDashboardStats() {
   }
 
   const overdueCount = computed(
-    () =>
-      followUpData.value.actionItems.filter(isOverdue).length +
-      followUpData.value.followUps.filter(isOverdue).length
+    () => scopedActionItems.value.filter(isOverdue).length + scopedFollowUps.value.filter(isOverdue).length
   );
 
   const topFollowUpsThisWeek = computed(() =>
-    sortByUrgency(followUpData.value.followUps.filter((f) => !f.done && isThisWeek(f.meetingStartTime))).slice(
+    sortByUrgency(scopedFollowUps.value.filter((f) => !f.done && isThisWeek(f.meetingStartTime))).slice(
       0,
       TOP_FOLLOW_UPS_LIMIT
     )

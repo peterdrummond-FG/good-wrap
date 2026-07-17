@@ -4,6 +4,16 @@
 
 export type ReviewStatus = "pending" | "needs_review" | "reviewed";
 
+// See db/schema.ts's companies comment — Flippen Group's portfolio companies
+// (plus Flippen Group itself, isInternal: true) that a meeting can be tagged
+// with.
+export interface Company {
+  id: string;
+  name: string;
+  slug: string;
+  isInternal: boolean;
+}
+
 export interface MeetingListItem {
   id: string;
   topic: string;
@@ -16,6 +26,8 @@ export interface MeetingListItem {
   topTakeaways: string[];
   /** Fully automatic, no approval step — used for the Meetings list search. */
   keywords: string[];
+  /** Null until AI-classified or manually tagged. */
+  company: Company | null;
 }
 
 // Replaced "timing" (today/tomorrow/this_week/next_week/unspecified) with
@@ -75,6 +87,10 @@ export interface MeetingDetail {
   participants: string[];
   transcript: string | null;
   reviewStatus: ReviewStatus;
+  company: Company | null;
+  /** Null until a company is first set; "manual" once Peter has ever picked
+   * or corrected it — see setMeetingCompany below. */
+  companySource: "ai" | "manual" | null;
   insights: {
     keywords: string[];
     // Full candidate sets (approved AND unapproved) — the review UI needs
@@ -148,6 +164,16 @@ export function fetchCurrentUser(): Promise<{ user: CurrentUser }> {
 
 export function fetchMeetings(): Promise<{ meetings: MeetingListItem[] }> {
   return request("/meetings");
+}
+
+export function fetchCompanies(): Promise<{ companies: Company[] }> {
+  return request("/companies");
+}
+
+// Manual re-tag/correction (see CompanyTag.vue's picker) — always wins over
+// Claude's own guess from here on. Pass companyId: null to clear the tag.
+export function setMeetingCompany(id: string, companyId: string | null): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/company`, { method: "PATCH", body: JSON.stringify({ companyId }) });
 }
 
 export function fetchMeetingDetail(id: string): Promise<{ meeting: MeetingDetail }> {

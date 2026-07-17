@@ -41,6 +41,7 @@ import {
   customType,
   index,
   uniqueIndex,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -85,6 +86,13 @@ export const notificationStatusEnum = pgEnum("notification_status", [
   "sent",
   "failed",
 ]);
+// Added 2026-07-17 alongside the companies/meeting-tagging feature. "ai" =
+// last set by Claude's own transcript classification (extractInsights.ts /
+// the process-transcripts skill); "manual" = Peter picked/corrected it
+// himself on the meeting detail page. Once "manual", automatic
+// (re)processing must never overwrite meetings.company_id again — see
+// applyAiCompanyGuess in queries.ts.
+export const companySourceEnum = pgEnum("company_source", ["ai", "manual"]);
 
 // --- users ---------------------------------------------------------------------
 // The people who own/log in to the system. Peter is the only row today, but
@@ -113,6 +121,36 @@ export const people = pgTable("people", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// --- companies -------------------------------------------------------------------
+// Added 2026-07-17: Flippen Group owns several distinct companies
+// (Teachworthy, Teamalytics, Capturing Kids Hearts, Integrous, Galleria,
+// Maisey, and others still to be added), and there was previously no way to
+// tell which one a given meeting was actually about. Claude infers the best
+// match from the transcript (see extractInsights.ts's `company` tool
+// property) against this table's name + aliases, including a row for
+// "Flippen Group" itself for internal/corporate meetings. Peter can always
+// re-pick from the meeting detail page — see meetings.companySource below
+// for how a manual pick is protected from being overwritten by a later
+// automatic (re)process.
+export const companies = pgTable("companies", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  // URL-safe identifier, also used as the logo filename under
+  // dashboard/public/logos/{slug}.png (see CompanyTag.vue) — kept as an
+  // explicit column rather than derived from `name` at read time so a
+  // display-name tweak (e.g. capitalization) never silently breaks the
+  // logo lookup or requires a matching asset rename.
+  slug: text("slug").notNull().unique(),
+  // Short names/abbreviations Claude should recognize in transcripts (e.g.
+  // ["CKH", "Capturing Kids Hearts"]) — matched case-insensitively against
+  // the transcript text, in addition to the full `name`.
+  aliases: jsonb("aliases").$type<string[]>().notNull().default([]),
+  // True only for "Flippen Group" itself — lets extraction distinguish an
+  // internal/corporate meeting from "couldn't tell which company."
+  isInternal: boolean("is_internal").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // --- meetings --------------------------------------------------------------------
 // zoomMeetingId stores Zoom's per-occurrence `uuid`, NOT its numeric `id` —
 // `id` is reused across every occurrence of a recurring meeting, so keying
@@ -134,12 +172,22 @@ export const meetings = pgTable(
     startTime: timestamp("start_time", { withTimezone: true }).notNull(),
     durationMinutes: integer("duration_minutes"),
     source: meetingSourceEnum("source").notNull().default("manual"),
+    // Nullable — a meeting starts uncategorized until the first processing
+    // pass (or Peter) tags it. references(..., {onDelete: "set null"}) so
+    // deleting a company (should that ever happen) un-tags its meetings
+    // rather than failing or cascading a meeting delete.
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "set null" }),
+    // Null until companyId is first set. See companySourceEnum above for why
+    // this exists — "manual" permanently protects the tag from automatic
+    // reprocessing (applyAiCompanyGuess in queries.ts checks this first).
+    companySource: companySourceEnum("company_source"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
     zoomMeetingIdUnique: uniqueIndex("meetings_zoom_meeting_id_unique")
       .on(table.zoomMeetingId)
       .where(sql`${table.zoomMeetingId} is not null`),
+    companyIdIdx: index("meetings_company_id_idx").on(table.companyId),
   })
 );
 
@@ -316,10 +364,15 @@ export const usersRelations = relations(users, ({ many }) => ({
 
 export const meetingsRelations = relations(meetings, ({ one, many }) => ({
   owner: one(users, { fields: [meetings.ownerId], references: [users.id] }),
+  company: one(companies, { fields: [meetings.companyId], references: [companies.id] }),
   participants: many(meetingParticipants),
   transcripts: many(transcripts),
   insights: many(meetingInsights),
   notifications: many(notificationsLog),
+}));
+
+export const companiesRelations = relations(companies, ({ many }) => ({
+  meetings: many(meetings),
 }));
 
 export const peopleRelations = relations(people, ({ many }) => ({

@@ -68,9 +68,10 @@
             :style="a.done ? 'opacity: 0.5' : ''"
           >
             <span class="col">{{ a.text }}</span>
-            <q-icon v-if="a.asanaTaskGid" name="check_circle" color="positive" size="18px">
+            <span v-if="a.asanaTaskGid" class="bw-asana-sent">
+              <img src="/logos/asana.png" alt="Sent to Asana" class="bw-asana-sent__icon">
               <q-tooltip>Sent to Asana</q-tooltip>
-            </q-icon>
+            </span>
             <q-btn
               v-else
               flat round dense size="sm" icon="send" color="grey-5"
@@ -235,3 +236,22 @@ async function onRegenerate() {
 onMounted(() => actionItemsReview.resetCopy());
 defineExpose({ resetCopy: actionItemsReview.resetCopy });
 </script>
+
+<style scoped>
+/* Replaces the old generic green check_circle icon (2026-07-17) — the real
+   Asana logo reads as "which tool this went to" at a glance, matching the
+   same logo-recognition idea as CompanyTag.vue. Sized to match the "send"
+   q-btn it replaces once an item's been sent. */
+.bw-asana-sent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+.bw-asana-sent__icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+</style>
