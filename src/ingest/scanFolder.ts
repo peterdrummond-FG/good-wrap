@@ -1,12 +1,31 @@
 // Folder auto-scan (Peter's "drop a .txt transcript in this folder" flow).
-// Meant to be run every 20 minutes by a plain OS scheduler (macOS launchd —
-// see the plist alongside this file) rather than any Claude/agent scheduler,
-// so it keeps working with no session open and costs nothing per tick beyond
-// the Claude API calls resolveCaptureContent/runFullPipeline may make (only
-// for a file that doesn't match Peter's fixed export format — see
-// parseStructuredTranscript.ts, which handles the normal case for free).
 //
-// One run = one pass over TRANSCRIPT_WATCH_DIR's top level:
+// Reworked 2026-07-17: this used to be one atomic run that captured a file
+// AND called extractInsights() (billed Anthropic API) in-process. That LLM
+// step now happens in a local Claude Code session instead (billed to Peter's
+// Claude Code plan/session usage) — see
+// .claude/skills/process-transcripts/SKILL.md, which shells out to the
+// subcommands below and POSTs the result to
+// POST /api/meetings/upload-processed (src/server/app.ts) once it's
+// generated the 4 insight categories itself. This file now only exposes the
+// deterministic filesystem bookkeeping — no Claude/Anthropic import here at
+// all.
+//
+// Subcommands (run via `npm run scan-folder -- <subcommand> ...`):
+//   list                          -> JSON array of candidate filenames
+//   claim <file>                  -> claims the file (locks it), prints
+//                                     { rawText, parsed } as JSON. `parsed`
+//                                     is Peter's fixed-export metadata (see
+//                                     parseStructuredTranscript.ts) or null
+//                                     if the file doesn't match that shape —
+//                                     the caller (a Claude Code session)
+//                                     reads rawText itself to infer metadata
+//                                     in that case, with no Claude API call.
+//   finish <file> processed|failed [--error "<message>"]
+//                                 -> moves the claimed file to its final
+//                                     resting place
+//
+// Directory layout (unchanged from before):
 //   <watch dir>/*.txt         -> candidates
 //   <watch dir>/.processing/  -> claimed by an in-progress run (lock)
 //   <watch dir>/processed/    -> captured successfully
@@ -14,14 +33,10 @@
 //                                <name>.error.txt explains why. Left here
 //                                (not retried) so a bad file can't spin
 //                                forever — Peter fixes it up and re-drops it.
-//
-// Usage: npm run scan-folder
 
 import { readdir, rename, stat, writeFile, readFile, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { resolveCaptureContent } from "./resolveCaptureContent";
-import { captureManualMeeting } from "./captureManualMeeting";
-import { runFullPipeline } from "../pipeline/runFullPipeline";
+import { parseStructuredTranscript } from "./parseStructuredTranscript";
 import { requireEnv } from "../util/env";
 import { runCli } from "../util/runCli";
 
@@ -49,7 +64,7 @@ async function findCandidateFiles(watchDir: string): Promise<string[]> {
     const fullPath = path.join(watchDir, entry.name);
     const stats = await stat(fullPath);
     if (Date.now() - stats.mtimeMs < MIN_AGE_MS) {
-      console.log(`scanFolder: skipping "${entry.name}" — modified too recently, may still be writing.`);
+      console.error(`scanFolder: skipping "${entry.name}" — modified too recently, may still be writing.`);
       continue;
     }
     candidates.push(entry.name);
@@ -57,79 +72,65 @@ async function findCandidateFiles(watchDir: string): Promise<string[]> {
   return candidates;
 }
 
-async function processOne(watchDir: string, filename: string): Promise<void> {
+async function cmdList(watchDir: string): Promise<void> {
+  const candidates = await findCandidateFiles(watchDir);
+  console.log(JSON.stringify(candidates));
+}
+
+async function cmdClaim(watchDir: string, filename: string | undefined): Promise<void> {
+  if (!filename) throw new Error("claim requires a filename argument.");
+
   const sourcePath = path.join(watchDir, filename);
   const lockedPath = path.join(watchDir, PROCESSING_DIR, filename);
 
   // Claim the file up front — cheap insurance against a still-running
-  // previous scan double-processing it (unlikely at a 20-minute interval,
-  // but free to guard against).
+  // previous scan (or a concurrently-invoked Claude Code session) double-
+  // processing it.
   await rename(sourcePath, lockedPath);
 
-  let meetingId: string;
-  try {
-    const rawText = await readFile(lockedPath, "utf-8");
-    if (!rawText.trim()) {
-      throw new Error("File is empty.");
+  const rawText = await readFile(lockedPath, "utf-8");
+  const stats = await stat(lockedPath);
+  const fallbackTopic = filename.replace(/\.[^./]+$/, "").trim() || "Auto-captured meeting";
+  const parsed = parseStructuredTranscript(rawText, fallbackTopic, stats.mtime);
+
+  console.log(JSON.stringify({ rawText, parsed }));
+}
+
+async function cmdFinish(watchDir: string, args: string[]): Promise<void> {
+  const [filename, status, ...rest] = args;
+  if (!filename || (status !== "processed" && status !== "failed")) {
+    throw new Error('finish requires: <file> processed|failed [--error "<message>"]');
+  }
+
+  const lockedPath = path.join(watchDir, PROCESSING_DIR, filename);
+  const destDir = status === "processed" ? PROCESSED_DIR : FAILED_DIR;
+  await rename(lockedPath, path.join(watchDir, destDir, filename));
+
+  if (status === "failed") {
+    const errorFlagIndex = rest.indexOf("--error");
+    const message = errorFlagIndex >= 0 ? rest[errorFlagIndex + 1] : undefined;
+    if (message) {
+      await writeFile(path.join(watchDir, FAILED_DIR, `${filename}.error.txt`), `${message}\n`, "utf-8");
     }
-
-    const stats = await stat(lockedPath);
-    const fallbackTopic = filename.replace(/\.[^./]+$/, "").trim() || "Auto-captured meeting";
-    const metadata = await resolveCaptureContent({
-      rawText,
-      fallbackTopic,
-      fallbackStartTime: stats.mtime,
-    });
-
-    const result = await captureManualMeeting({
-      topic: metadata.topic,
-      startTime: metadata.startTime,
-      durationMinutes: metadata.durationMinutes,
-      participants: metadata.participants,
-      transcript: metadata.transcript,
-      source: "upload",
-    });
-    meetingId = result.meetingId;
-  } catch (err) {
-    // Capture itself failed — quarantine so it doesn't retry forever, with
-    // an error note alongside it so Peter can see what went wrong.
-    const failedPath = path.join(watchDir, FAILED_DIR, filename);
-    await rename(lockedPath, failedPath);
-    const message = err instanceof Error ? err.message : String(err);
-    await writeFile(path.join(watchDir, FAILED_DIR, `${filename}.error.txt`), `${message}\n`, "utf-8");
-    console.error(`scanFolder: capture failed for "${filename}", moved to ${FAILED_DIR}/ — ${message}`);
-    return;
   }
 
-  // Capture succeeded — move to processed/ before attempting processing, same
-  // "capture always succeeds independently of processing" split used
-  // everywhere else in this codebase (see app.ts's POST /api/meetings).
-  await rename(lockedPath, path.join(watchDir, PROCESSED_DIR, filename));
-  console.log(`scanFolder: captured "${filename}" as meeting ${meetingId}.`);
-
-  try {
-    await runFullPipeline(meetingId);
-  } catch (err) {
-    console.error(
-      `scanFolder: auto-processing failed for meeting ${meetingId} (captured fine, from "${filename}") — ` +
-        `${err instanceof Error ? err.message : err}. Use the dashboard's Reprocess button to retry.`
-    );
-  }
+  console.log(JSON.stringify({ ok: true, filename, status }));
 }
 
 async function main() {
   const watchDir = requireEnv("TRANSCRIPT_WATCH_DIR");
   await ensureSubdirs(watchDir);
 
-  const candidates = await findCandidateFiles(watchDir);
-  if (candidates.length === 0) {
-    console.log("scanFolder: no new transcripts found.");
-    return;
-  }
-
-  console.log(`scanFolder: found ${candidates.length} new transcript(s): ${candidates.join(", ")}`);
-  for (const filename of candidates) {
-    await processOne(watchDir, filename);
+  const [subcommand, ...args] = process.argv.slice(2);
+  switch (subcommand) {
+    case "list":
+      return cmdList(watchDir);
+    case "claim":
+      return cmdClaim(watchDir, args[0]);
+    case "finish":
+      return cmdFinish(watchDir, args);
+    default:
+      throw new Error(`Unknown subcommand "${subcommand ?? ""}". Expected one of: list, claim, finish.`);
   }
 }
 

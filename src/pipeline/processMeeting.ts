@@ -13,11 +13,8 @@
 // re-run after a prompt tweak. Re-running does NOT discard prior review work,
 // though (CODE-AUDIT.md item #5, fixed 2026-07-16) — see mergeApprovedForward.
 
-import { eq } from "drizzle-orm";
-import { db, schema } from "../db/client";
 import { extractInsights } from "./extractInsights";
-import { embedChunks } from "./embedChunks";
-import { chunkTranscript } from "./chunkText";
+import { persistMeetingInsights } from "./persistMeetingInsights";
 import { loadMeetingContext } from "./meetingContext";
 import { mergeApprovedForward } from "./mergeApprovedForward";
 import { getMeetingDetail } from "../server/queries";
@@ -74,46 +71,19 @@ export async function processMeeting(
   const actionItems = mergeApprovedForward(previouslyApprovedActionItems, insights.actionItems);
   const followUps = mergeApprovedForward(previouslyApprovedFollowUps, insights.followUps);
 
-  const chunks = chunkTranscript(transcript.rawText);
-  const embeddings = await embedChunks(chunks, options.embedBatchSize);
+  // actionItemsReviewedAt/followUpsReviewedAt are deliberately left null by
+  // persistMeetingInsights — a fresh or re-run process always surfaces fresh
+  // unreviewed candidates alongside whatever was already approved (see
+  // mergeApprovedForward above), so both categories need a look again even
+  // though nothing already approved was lost. See reviewMeeting.ts for what
+  // flips these back to non-null.
+  const { insightsId, chunkCount } = await persistMeetingInsights(
+    meetingId,
+    transcript.id,
+    transcript.rawText,
+    { keywords: insights.keywords, takeaways: insights.takeaways, actionItems, followUps },
+    { embedBatchSize: options.embedBatchSize }
+  );
 
-  return db.transaction(async (tx) => {
-    // Idempotency: clear any prior run's output for this meeting first.
-    await tx
-      .delete(schema.meetingInsights)
-      .where(eq(schema.meetingInsights.meetingId, meetingId));
-    await tx
-      .delete(schema.transcriptChunks)
-      .where(eq(schema.transcriptChunks.transcriptId, transcript.id));
-
-    // actionItemsReviewedAt/followUpsReviewedAt are deliberately omitted
-    // (default to null) — a fresh or re-run process always surfaces fresh
-    // unreviewed candidates alongside whatever was already approved (see
-    // mergeApprovedForward above), so both categories need a look again even
-    // though nothing already approved was lost. See reviewMeeting.ts for what
-    // flips these back to non-null.
-    const [insightsRow] = await tx
-      .insert(schema.meetingInsights)
-      .values({
-        meetingId,
-        keywords: insights.keywords,
-        takeaways: insights.takeaways,
-        actionItems,
-        followUps,
-      })
-      .returning({ id: schema.meetingInsights.id });
-
-    if (chunks.length > 0) {
-      await tx.insert(schema.transcriptChunks).values(
-        chunks.map((chunkText, i) => ({
-          transcriptId: transcript.id,
-          chunkIndex: i,
-          chunkText,
-          embedding: embeddings[i],
-        }))
-      );
-    }
-
-    return { meetingId, insightsId: insightsRow.id, chunkCount: chunks.length };
-  });
+  return { meetingId, insightsId, chunkCount };
 }

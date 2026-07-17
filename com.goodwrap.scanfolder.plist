@@ -5,24 +5,47 @@
   <key>Label</key>
   <string>com.goodwrap.scanfolder</string>
 
-  <!-- Runs `npm run scan-folder` (src/ingest/scanFolder.ts) every 20 minutes. -->
+  <!-- Reworked 2026-07-17: used to run `npm run scan-folder`
+       (src/ingest/scanFolder.ts), which called extractInsights() in-process
+       — a billed Anthropic API call. Now runs the `claude` CLI headlessly
+       (-p, non-interactive) to invoke the process-transcripts skill
+       (.claude/skills/process-transcripts/SKILL.md), which generates the
+       same 4 insight categories itself and bills to Peter's Claude Code
+       plan/session usage instead. --dangerously-skip-permissions is
+       required since no human is present to approve the Bash/curl tool
+       calls the skill needs — this is trusted local automation Peter set up
+       himself, on his own machine, running only the scan-folder subcommands
+       and curl against his own API.
+
+       Peter uses the Claude Desktop app day-to-day (a GUI process — not
+       scriptable by launchd), so the standalone Claude Code CLI
+       (@anthropic-ai/claude-code) was installed separately just for this
+       job, into a user-owned npm prefix (~/.npm-global) since
+       /usr/local/lib/node_modules is root-owned on this machine. Confirmed
+       working path below via `~/.npm-global/bin/claude -p "..."` (2026-07-17).
+       It shares Peter's Claude Code login/plan — logged in once via
+       `claude` -> `/login` in an interactive terminal; headless -p calls
+       reuse that same session. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/npm</string>
-    <string>run</string>
-    <string>scan-folder</string>
+    <string>/Users/peterdrummond/.npm-global/bin/claude</string>
+    <string>-p</string>
+    <string>Use the process-transcripts skill to scan the transcript watch folder and process any new files.</string>
+    <string>--dangerously-skip-permissions</string>
   </array>
 
   <key>WorkingDirectory</key>
   <string>/Users/peterdrummond/Documents/FG Good Wrap/good-wrap</string>
 
-  <!-- launchd's default PATH doesn't include /usr/local/bin, which is where
-       both npm and node live here — without this, npm's own #!/usr/bin/env
-       node shebang can't find node and the job fails silently. -->
+  <!-- launchd's default PATH doesn't include /usr/local/bin,
+       /Users/peterdrummond/.local/bin, or /Users/peterdrummond/.npm-global/bin
+       (where the claude CLI actually lives) — without this, the job fails
+       silently. launchd does not expand "~", so these must be literal
+       absolute paths. -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>/Users/peterdrummond/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:/Users/peterdrummond/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>StartInterval</key>

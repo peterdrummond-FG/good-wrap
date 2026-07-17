@@ -30,10 +30,16 @@ import {
   type UpdateMeetingInput,
   type UpdateMeetingInsightsInput,
 } from "./queries";
-import { captureManualMeeting, type CaptureManualMeetingInput } from "../ingest/captureManualMeeting";
+import {
+  captureManualMeeting,
+  type CaptureManualMeetingInput,
+  type CaptureParticipantInput,
+} from "../ingest/captureManualMeeting";
 import { resolveCaptureContent } from "../ingest/resolveCaptureContent";
 import { handleZoomTranscriptEvent } from "../ingest/captureFromZoomWebhook";
+import { validateProcessedInsights, type ProcessedInsightsInput } from "../ingest/validateProcessedInsights";
 import { runFullPipeline } from "../pipeline/runFullPipeline";
+import { persistMeetingInsights } from "../pipeline/persistMeetingInsights";
 import { submitMeetingReview, type ReviewMeetingInput } from "../pipeline/reviewMeeting";
 import { regenerateInsightCategory, type RegenerateCategory } from "../pipeline/regenerateCategory";
 import { askQuestion } from "../qa/askQuestion";
@@ -233,6 +239,59 @@ export function buildApp() {
     // transcript in the response body.
     const { transcript: _transcript, ...visibleMetadata } = metadata;
     return reply.code(201).send({ ...result, metadata: visibleMetadata, ...outcome });
+  });
+
+  // Folder-scan capture, now that a local Claude Code session (billed to
+  // Peter's Claude Code plan/session usage, not ANTHROPIC_API_KEY) generates
+  // the 4 insight categories itself instead of scanFolder.ts calling
+  // extractInsights() — see src/ingest/scanFolder.ts and
+  // .claude/skills/process-transcripts/SKILL.md. This is the one route that
+  // writes fully-formed insights straight to meeting_insights with no
+  // schema-enforced Claude tool-use call in between, so it's the one route
+  // on this otherwise-open API that checks a shared secret.
+  app.post<{
+    Body: {
+      topic?: string;
+      startTime?: string;
+      durationMinutes?: number;
+      participants?: CaptureParticipantInput[];
+      transcript?: string;
+      insights?: ProcessedInsightsInput;
+    };
+  }>("/api/meetings/upload-processed", async (req, reply) => {
+    const expectedKey = process.env.LOCAL_WORKER_API_KEY;
+    const providedKey = req.headers["x-worker-key"];
+    if (!expectedKey || providedKey !== expectedKey) {
+      return reply.code(401).send({ error: "Missing or invalid x-worker-key header." });
+    }
+
+    const body = req.body ?? {};
+    if (!body.topic || !body.startTime || !body.transcript || !body.insights) {
+      return reply
+        .code(400)
+        .send({ error: "topic, startTime, transcript, and insights are all required." });
+    }
+
+    const insights = validateProcessedInsights(body.insights);
+
+    const result = await captureManualMeeting({
+      topic: body.topic,
+      startTime: body.startTime,
+      durationMinutes: body.durationMinutes,
+      participants: body.participants ?? [],
+      transcript: body.transcript,
+      source: "upload",
+    });
+
+    const { insightsId, chunkCount } = await persistMeetingInsights(
+      result.meetingId,
+      result.transcriptId,
+      body.transcript,
+      insights
+    );
+
+    const meeting = await getMeetingDetail(result.meetingId);
+    return reply.code(201).send({ ...result, insightsId, chunkCount, meeting });
   });
 
   app.patch<{ Params: { id: string }; Body: UpdateMeetingInput }>(
