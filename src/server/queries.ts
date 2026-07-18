@@ -863,6 +863,37 @@ export async function deleteFollowUp(meetingId: string, index: number): Promise<
 export interface PersonListItem {
   id: string;
   name: string;
+  // Set directly by Peter on the person page — never inferred from meeting
+  // history (some people work with exactly one company, but Flippen Group
+  // staff span several, so a derived "companies from tagged meetings" view
+  // wouldn't be accurate either way). See setPersonCompanies below.
+  companies: CompanyRef[];
+}
+
+/** Every company a person has been directly tagged with, keyed by person id
+ * — shared by listPeople and getPersonDetail so the two can't drift on how
+ * this join is read. Empty array (not omitted) for a person with none set. */
+async function loadCompaniesByPersonId(personIds: string[]): Promise<Map<string, CompanyRef[]>> {
+  const byPerson = new Map<string, CompanyRef[]>();
+  if (personIds.length === 0) return byPerson;
+
+  const rows = await db
+    .select({
+      personId: schema.personCompanies.personId,
+      id: schema.companies.id,
+      name: schema.companies.name,
+      slug: schema.companies.slug,
+    })
+    .from(schema.personCompanies)
+    .innerJoin(schema.companies, eq(schema.companies.id, schema.personCompanies.companyId))
+    .where(inArray(schema.personCompanies.personId, personIds));
+
+  for (const row of rows) {
+    const list = byPerson.get(row.personId) ?? [];
+    list.push({ id: row.id, name: row.name, slug: row.slug });
+    byPerson.set(row.personId, list);
+  }
+  return byPerson;
 }
 
 /** Every person who's attended at least one meeting. */
@@ -872,11 +903,40 @@ export async function listPeople(): Promise<PersonListItem[]> {
     .from(schema.people)
     .innerJoin(schema.meetingParticipants, eq(schema.meetingParticipants.personId, schema.people.id));
 
-  const byId = new Map<string, PersonListItem>();
+  const byId = new Map<string, { id: string; name: string }>();
   for (const row of rows) {
     byId.set(row.id, { id: row.id, name: row.name ?? row.email ?? "Unknown" });
   }
-  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+  const people = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const companiesByPerson = await loadCompaniesByPersonId(people.map((p) => p.id));
+  return people.map((p) => ({ ...p, companies: companiesByPerson.get(p.id) ?? [] }));
+}
+
+/**
+ * Replaces a person's full set of tagged companies (same "replace the whole
+ * list" convention as resolveParticipantIds for meeting participants) —
+ * always a manual, explicit action from the person page, never inferred.
+ * Returns false if no person exists with this id (caller should 404).
+ */
+export async function setPersonCompanies(personId: string, companyIds: string[]): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ id: schema.people.id })
+      .from(schema.people)
+      .where(eq(schema.people.id, personId))
+      .limit(1);
+    if (!existing) return false;
+
+    await tx.delete(schema.personCompanies).where(eq(schema.personCompanies.personId, personId));
+    const uniqueCompanyIds = [...new Set(companyIds)];
+    if (uniqueCompanyIds.length > 0) {
+      await tx
+        .insert(schema.personCompanies)
+        .values(uniqueCompanyIds.map((companyId) => ({ personId, companyId })));
+    }
+    return true;
+  });
 }
 
 export interface PersonMeetingSummary {
@@ -895,6 +955,8 @@ export interface PersonFollowUp extends FollowUpItem {
 export interface PersonDetail {
   id: string;
   name: string;
+  // Set directly by Peter — see PersonListItem.companies above.
+  companies: CompanyRef[];
   meetings: PersonMeetingSummary[];
   // Approved follow-ups attributed to this person — matched by display name,
   // same linkage the rest of the dashboard uses for "person" (see
@@ -914,6 +976,7 @@ export async function getPersonDetail(personId: string): Promise<PersonDetail | 
   if (!person) return null;
 
   const name = person.name ?? person.email ?? "Unknown";
+  const companies = (await loadCompaniesByPersonId([person.id])).get(person.id) ?? [];
 
   const participantRows = await db
     .select({ meetingId: schema.meetingParticipants.meetingId })
@@ -922,7 +985,7 @@ export async function getPersonDetail(personId: string): Promise<PersonDetail | 
   const meetingIds = participantRows.map((row) => row.meetingId);
 
   if (meetingIds.length === 0) {
-    return { id: person.id, name, meetings: [], followUps: [] };
+    return { id: person.id, name, companies, meetings: [], followUps: [] };
   }
 
   const meetingRows = await db
@@ -974,5 +1037,5 @@ export async function getPersonDetail(personId: string): Promise<PersonDetail | 
   }
   followUps.sort((a, b) => b.meetingStartTime.getTime() - a.meetingStartTime.getTime());
 
-  return { id: person.id, name, meetings, followUps };
+  return { id: person.id, name, companies, meetings, followUps };
 }

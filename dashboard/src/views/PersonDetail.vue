@@ -10,6 +10,31 @@
       <div class="bw-panel q-pa-lg q-mb-md">
         <div class="row items-center q-gutter-sm q-mb-md">
           <PersonTag :name="person.name" />
+
+          <q-btn-dropdown flat dense no-caps content-class="bw-company-menu">
+            <template #label>
+              <span class="row items-center q-gutter-xs">
+                <CompanyTag v-for="c in person.companies" :key="c.id" :company="c" />
+                <span v-if="!person.companies.length" class="text-caption text-grey-6">+ Companies</span>
+              </span>
+            </template>
+            <q-list>
+              <q-item v-for="c in companies" :key="c.id" clickable @click="onToggleCompany(c.id)">
+                <q-item-section avatar><CompanyTag :company="c" /></q-item-section>
+                <q-item-section>{{ c.name }}</q-item-section>
+                <q-item-section side>
+                  <!-- click.stop so this doesn't ALSO trigger the q-item's own
+                       @click (which would double-toggle back to no-op) —
+                       q-item stays clickable anywhere else on the row. -->
+                  <q-checkbox
+                    :model-value="isCompanySelected(c.id)"
+                    @click.stop
+                    @update:model-value="onToggleCompany(c.id)"
+                  />
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </q-btn-dropdown>
         </div>
 
         <div class="row items-center justify-between q-mb-xs">
@@ -114,13 +139,18 @@ import { onMounted, ref } from "vue";
 import {
   fetchPersonDetail,
   fetchPersonSummary,
+  setPersonCompanies,
   type PersonDetail,
   type PersonSummaryResult,
 } from "../api";
+import { useCompanies } from "../composables/useCompanies";
 import { formatMeetingDateTime as formatDate } from "../formatDate";
 import { reviewStatusListLabel as pillLabel, reviewStatusPillClass as pillClass } from "../reviewStatus";
 import { urgencyLabel, urgencyPillClass } from "../urgency";
 import PersonTag from "../components/PersonTag.vue";
+import CompanyTag from "../components/CompanyTag.vue";
+
+const { companies } = useCompanies();
 
 const props = defineProps<{ id: string }>();
 
@@ -139,6 +169,28 @@ async function load() {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
     loading.value = false;
+  }
+}
+
+function isCompanySelected(companyId: string): boolean {
+  return person.value?.companies.some((c) => c.id === companyId) ?? false;
+}
+
+// Direct, manual set — never inferred from meeting history (see
+// PersonDetail.companies' comment in api.ts). Toggles one company and sends
+// the whole resulting set, same replace-the-list convention the backend
+// uses for meeting participants.
+async function onToggleCompany(companyId: string) {
+  if (!person.value) return;
+  const current = person.value.companies.map((c) => c.id);
+  const next = isCompanySelected(companyId)
+    ? current.filter((id) => id !== companyId)
+    : [...current, companyId];
+  try {
+    const result = await setPersonCompanies(person.value.id, next);
+    person.value = result.person;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
   }
 }
 

@@ -356,6 +356,8 @@ export function fetchFollowUps(): Promise<{
 export interface PersonListItem {
   id: string;
   name: string;
+  /** Set directly on the person page — never inferred from meeting history. */
+  companies: Company[];
 }
 
 export function fetchPeople(): Promise<{ people: PersonListItem[] }> {
@@ -378,6 +380,8 @@ export interface PersonFollowUp extends FollowUpItem {
 export interface PersonDetail {
   id: string;
   name: string;
+  /** Set directly on the person page — never inferred from meeting history. */
+  companies: Company[];
   meetings: PersonMeetingSummary[];
   /** Every approved follow-up involving this person — no "done" concept yet, so not just outstanding ones. */
   followUps: PersonFollowUp[];
@@ -385,6 +389,13 @@ export interface PersonDetail {
 
 export function fetchPersonDetail(id: string): Promise<{ person: PersonDetail }> {
   return request(`/people/${id}`);
+}
+
+// Replaces the person's full set of tagged companies in one call (same
+// "replace the whole list" convention as updateMeeting's participants) —
+// always a direct pick from the person page, never inferred.
+export function setPersonCompanies(id: string, companyIds: string[]): Promise<{ person: PersonDetail }> {
+  return request(`/people/${id}/companies`, { method: "PATCH", body: JSON.stringify({ companyIds }) });
 }
 
 export interface PersonSummaryResult {

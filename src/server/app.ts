@@ -28,6 +28,7 @@ import {
   setActionItemDone,
   setFollowUpDone,
   setMeetingCompany,
+  setPersonCompanies,
   updateMeeting,
   updateMeetingInsights,
   type UpdateMeetingInput,
@@ -551,6 +552,22 @@ export function buildApp() {
     }
     return reply.send({ person });
   });
+
+  // Sets which companies this person works with — always a direct, manual
+  // pick from the person page (never inferred from their meeting history,
+  // since some people work with exactly one company while Flippen Group
+  // staff span several). Replaces the person's full set each call.
+  app.patch<{ Params: { id: string }; Body: { companyIds?: string[] } }>(
+    "/api/people/:id/companies",
+    async (req, reply) => {
+      const found = await setPersonCompanies(req.params.id, req.body?.companyIds ?? []);
+      if (!found) {
+        return reply.code(404).send({ error: `No person found for id ${req.params.id}` });
+      }
+      const person = await getPersonDetail(req.params.id);
+      return reply.send({ person });
+    }
+  );
 
   // Triggers a real Claude call — never run automatically, only from the
   // person page's explicit "Generate summary" button.

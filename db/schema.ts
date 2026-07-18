@@ -151,6 +151,30 @@ export const companies = pgTable("companies", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// --- person_companies --------------------------------------------------------------
+// Added 2026-07-17: which companies a person works with — set directly by
+// Peter (never inferred from their meeting history), since some people work
+// with exactly one company while Flippen Group staff span several. Plain
+// many-to-many join, no extra columns — see setPersonCompanies in
+// queries.ts, which always replaces a person's full set in one call (same
+// "replace the whole list" convention as resolveParticipantIds for meeting
+// participants).
+export const personCompanies = pgTable(
+  "person_companies",
+  {
+    personId: uuid("person_id")
+      .notNull()
+      .references(() => people.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.personId, table.companyId] }),
+    companyIdIdx: index("person_companies_company_id_idx").on(table.companyId),
+  })
+);
+
 // --- meetings --------------------------------------------------------------------
 // zoomMeetingId stores Zoom's per-occurrence `uuid`, NOT its numeric `id` —
 // `id` is reused across every occurrence of a recurring meeting, so keying
@@ -373,10 +397,17 @@ export const meetingsRelations = relations(meetings, ({ one, many }) => ({
 
 export const companiesRelations = relations(companies, ({ many }) => ({
   meetings: many(meetings),
+  personCompanies: many(personCompanies),
 }));
 
 export const peopleRelations = relations(people, ({ many }) => ({
   meetingParticipants: many(meetingParticipants),
+  personCompanies: many(personCompanies),
+}));
+
+export const personCompaniesRelations = relations(personCompanies, ({ one }) => ({
+  person: one(people, { fields: [personCompanies.personId], references: [people.id] }),
+  company: one(companies, { fields: [personCompanies.companyId], references: [companies.id] }),
 }));
 
 export const meetingParticipantsRelations = relations(meetingParticipants, ({ one }) => ({
