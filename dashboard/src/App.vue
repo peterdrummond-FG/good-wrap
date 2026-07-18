@@ -2,20 +2,36 @@
   <q-layout view="hHh LpR fFf">
     <q-header class="bw-header" bordered>
       <q-toolbar>
+        <q-btn
+          flat
+          dense
+          round
+          icon="menu"
+          class="bw-drawer-toggle q-mr-sm"
+          aria-label="Toggle navigation menu"
+          @click="drawerOpen = !drawerOpen"
+        />
         <q-toolbar-title class="text-weight-medium text-grey-5" style="font-size: 0.95rem">
           {{ pageTitle }}
         </q-toolbar-title>
       </q-toolbar>
     </q-header>
 
-    <q-drawer show-if-above :width="240" side="left" class="bw-drawer" :breakpoint="700">
-      <div class="column full-height q-pa-md">
-        <div class="row items-center q-mb-lg q-gutter-sm">
+    <q-drawer
+      v-model="drawerOpen"
+      show-if-above
+      :width="188"
+      side="left"
+      class="bw-drawer"
+      :breakpoint="DRAWER_BREAKPOINT"
+    >
+      <div class="column full-height bw-drawer-content">
+        <div class="row items-center q-mb-md q-gutter-sm">
           <div
             class="flex flex-center"
-            style="width: 36px; height: 36px; border-radius: 10px; background: var(--q-primary)"
+            style="width: 32px; height: 32px; border-radius: 9px; background: var(--q-primary); flex-shrink: 0"
           >
-            <q-icon name="smart_toy" color="white" size="20px" />
+            <q-icon name="smart_toy" color="white" size="18px" />
           </div>
           <div class="text-weight-bold text-white">good-wrap</div>
         </div>
@@ -26,8 +42,9 @@
           :to="item.to"
           class="bw-nav-item"
           :class="{ 'bw-nav-item--active': isActive(item.to) }"
+          @click="onNavClick"
         >
-          <q-icon :name="item.icon" size="20px" />
+          <q-icon :name="item.icon" size="18px" />
           {{ item.label }}
         </router-link>
 
@@ -58,6 +75,26 @@ import { fetchCurrentUser, type CurrentUser } from "./api";
 
 const route = useRoute();
 const currentUser = ref<CurrentUser | null>(null);
+// Drives the drawer below its 700px breakpoint (see the q-drawer's
+// :breakpoint prop) — above it, show-if-above keeps the drawer docked open
+// regardless of this value. Added for the UI/UX pass, 2026-07-17: previously
+// there was no toggle at all, so the nav became completely unreachable below
+// 700px (show-if-above hides it, and nothing could open it back up).
+const drawerOpen = ref(false);
+// Must match the q-drawer's own :breakpoint prop below.
+const DRAWER_BREAKPOINT = 700;
+
+// Regression fixed 2026-07-17: this used to unconditionally set
+// drawerOpen = false on every nav click, including on desktop. show-if-above
+// only forces the drawer open automatically when *crossing* above the
+// breakpoint — once mounted above it, an explicit v-model write (like that
+// unconditional close) is respected and actually hides the docked drawer,
+// with no way to reopen it since the toggle button is CSS-hidden above the
+// breakpoint. Only auto-close below the breakpoint, where the drawer is an
+// overlay the user expects to dismiss after picking a destination.
+function onNavClick() {
+  if (window.innerWidth < DRAWER_BREAKPOINT) drawerOpen.value = false;
+}
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: "space_dashboard" },
@@ -94,10 +131,28 @@ onMounted(async () => {
 
 <style scoped>
 .bw-header {
-  background: var(--q-dark-page);
+  background: rgba(23, 24, 28, 0.68);
+  border-bottom-color: var(--glass-border) !important;
 }
 .bw-drawer {
-  background: var(--bw-surface);
-  border-right: 1px solid var(--bw-border);
+  background: var(--glass-drawer-bg);
+  border-right: 1px solid var(--glass-border);
+}
+/* Replaces the old q-pa-md (16px all round) — narrower to leave more room
+   for the main content next to it (Peter's ask, 2026-07-17), on top of the
+   drawer itself shrinking from 240px to 188px. */
+.bw-drawer-content {
+  padding: 12px 10px;
+}
+/* Matches the q-drawer's own :breakpoint="700" exactly — above it the
+   drawer is permanently docked open (show-if-above), so the toggle would be
+   dead weight in the header; below it, it's the only way to reach nav. */
+.bw-drawer-toggle {
+  display: none;
+}
+@media (max-width: 699px) {
+  .bw-drawer-toggle {
+    display: inline-flex;
+  }
 }
 </style>

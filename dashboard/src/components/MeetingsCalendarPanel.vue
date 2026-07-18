@@ -24,13 +24,48 @@
           </template>
         </q-select>
       </div>
-      <div class="bw-panel__subtitle">{{ formattedSelectedRange }}</div>
+      <!-- Compact date-nav strip (replaces the old always-visible
+           "Friday, July 17" subtitle line + separate "Today" button, UI/UX
+           pass 2026-07-17) — the date label itself doubles as the range
+           display, and doubling chevrons/label with the Today action below
+           keeps this to one row instead of two.
 
-      <!-- Consolidated into one row (Peter's ask, 2026-07-16): scope toggle,
-           day-nav, and view-mode toggle used to be split across two rows —
-           merging them frees a full row of height for the calendar/timeline
-           below. -->
+           The label itself is the month-calendar expand/collapse trigger
+           (extended same day) — there used to be a separate icon button for
+           this elsewhere in the header, but it used the same calendar glyph
+           as the Calendar/List mode toggle two rows down, so two
+           different-purpose buttons looked like duplicates of each other.
+           Folding the toggle into the date label removes that second
+           calendar icon entirely instead of just re-skinning it. -->
       <div class="row items-center justify-between no-wrap q-mt-sm">
+        <div class="row items-center no-wrap q-gutter-xs">
+          <q-btn flat round dense size="sm" icon="chevron_left" @click="shiftRange(-1)" />
+          <button
+            type="button"
+            class="bw-date-nav-label"
+            :class="{ 'bw-date-nav-label--active': calendarExpanded }"
+            :aria-expanded="calendarExpanded"
+            aria-label="Toggle month calendar"
+            @click="calendarExpanded = !calendarExpanded"
+          >
+            {{ formattedSelectedRange }}
+            <q-icon :name="calendarExpanded ? 'expand_less' : 'expand_more'" size="18px" />
+          </button>
+          <q-btn flat round dense size="sm" icon="chevron_right" @click="shiftRange(1)" />
+        </div>
+        <q-btn v-if="!isToday" flat dense no-caps size="sm" label="Today" @click="goToday" />
+      </div>
+
+      <!-- Scope toggle + view-mode toggle (Peter's ask, 2026-07-16). The
+           month grid below defaults to collapsed (calendarExpanded starts
+           false, toggled from the date label above) since it was eating the
+           majority of this panel's height for a feature (jumping to an
+           arbitrary date) used far less often than the day-by-day
+           chevron/Today nav above. It no longer auto-collapses when you
+           pick a date (see onPickDate) — it's a plain toggle now, open until
+           the date label is clicked again, so browsing several dates in a
+           row doesn't mean reopening it each time. -->
+      <div class="row items-center justify-between no-wrap q-mt-xs">
         <q-btn-toggle
           v-model="scope"
           dense
@@ -44,11 +79,6 @@
             { label: 'Week', value: 'week' },
           ]"
         />
-        <div class="row q-gutter-xs items-center">
-          <q-btn flat round dense icon="chevron_left" @click="shiftRange(-1)" />
-          <q-btn flat dense no-caps label="Today" :disable="isToday" @click="goToday" />
-          <q-btn flat round dense icon="chevron_right" @click="shiftRange(1)" />
-        </div>
         <!-- Calendar mode is day-only — switching to Week scope forces List
              mode (see the scope watcher below), so there's nothing to toggle
              here once Week is selected. -->
@@ -75,36 +105,57 @@
            this panel's width, and forcing it to stretch risked the same
            "fights back" behavior we hit trying to shrink its height (see
            the .bw-mini-cal comment). A plain CSS grid gives real control
-           over both dimensions. -->
-      <div class="bw-mini-cal">
-        <div class="bw-mini-cal__nav row items-center justify-center no-wrap q-gutter-xs">
-          <q-btn flat round dense size="sm" icon="chevron_left" @click="shiftViewMonth(-1)" />
-          <div class="bw-mini-cal__nav-label">{{ viewMonthLabel }}</div>
-          <q-btn flat round dense size="sm" icon="chevron_right" @click="shiftViewMonth(1)" />
-          <q-btn flat round dense size="sm" icon="chevron_left" @click="shiftViewYear(-1)" />
-          <div class="bw-mini-cal__nav-label">{{ viewYearLabel }}</div>
-          <q-btn flat round dense size="sm" icon="chevron_right" @click="shiftViewYear(1)" />
+           over both dimensions. Collapsed by default — see calendarExpanded
+           comment above. -->
+      <template v-if="calendarExpanded">
+        <div class="bw-mini-cal">
+          <!-- Single row (UI/UX pass 2026-07-17, was two rows: a month
+               chevron-pair and a separate year chevron-pair) — shiftViewMonth
+               already rolls the year over automatically (JS Date normalizes
+               month overflow), so a second dedicated year nav was redundant
+               for the common case of paging month-by-month. The year label
+               is still directly jumpable via its own dropdown for a bigger
+               leap, without a whole extra row of chevrons. -->
+          <div class="bw-mini-cal__nav row items-center justify-center no-wrap q-gutter-xs">
+            <q-btn flat round dense size="xs" icon="chevron_left" @click="shiftViewMonth(-1)" />
+            <div class="bw-mini-cal__nav-label">{{ viewMonthLabel }}</div>
+            <q-btn-dropdown flat dense no-caps size="xs" :label="viewYearLabel" class="bw-mini-cal__year-dropdown">
+              <q-list dense>
+                <q-item
+                  v-for="y in yearOptions"
+                  :key="y"
+                  clickable
+                  v-close-popup
+                  :active="y === viewDate.getFullYear()"
+                  @click="jumpToYear(y)"
+                >
+                  <q-item-section>{{ y }}</q-item-section>
+                </q-item>
+              </q-list>
+            </q-btn-dropdown>
+            <q-btn flat round dense size="xs" icon="chevron_right" @click="shiftViewMonth(1)" />
+          </div>
+          <div class="bw-mini-cal__weekdays">
+            <span v-for="d in WEEKDAY_LABELS" :key="d">{{ d }}</span>
+          </div>
+          <div class="bw-mini-cal__grid">
+            <template v-for="(cell, i) in monthCells" :key="i">
+              <button
+                v-if="cell"
+                type="button"
+                class="bw-mini-cal__cell"
+                :class="{ 'bw-mini-cal__cell--today': cell.isToday, 'bw-mini-cal__cell--selected': cell.isSelected }"
+                @click="onPickDate(cell.date)"
+              >
+                {{ cell.day }}
+              </button>
+              <div v-else class="bw-mini-cal__cell bw-mini-cal__cell--empty" />
+            </template>
+          </div>
         </div>
-        <div class="bw-mini-cal__weekdays">
-          <span v-for="d in WEEKDAY_LABELS" :key="d">{{ d }}</span>
-        </div>
-        <div class="bw-mini-cal__grid">
-          <template v-for="(cell, i) in monthCells" :key="i">
-            <button
-              v-if="cell"
-              type="button"
-              class="bw-mini-cal__cell"
-              :class="{ 'bw-mini-cal__cell--today': cell.isToday, 'bw-mini-cal__cell--selected': cell.isSelected }"
-              @click="onPickDate(cell.date)"
-            >
-              {{ cell.day }}
-            </button>
-            <div v-else class="bw-mini-cal__cell bw-mini-cal__cell--empty" />
-          </template>
-        </div>
-      </div>
 
-      <q-separator class="q-my-sm" />
+        <q-separator class="q-my-sm" />
+      </template>
 
       <template v-if="mode === 'calendar'">
         <q-scroll-area v-if="dayMeetings.length" class="col">
@@ -214,6 +265,10 @@ const DAY_END_HOUR = 19;
 
 const scope = ref<"day" | "week">("day");
 const mode = ref<"calendar" | "list">("calendar");
+// Collapsed by default (see the template comment above) — the month grid is
+// an occasional "jump to a date" tool, not something that needs to be on
+// screen at all times next to the day-by-day chevron/Today nav.
+const calendarExpanded = ref(false);
 
 // Calendar mode only ever shows a single day, so it has no meaning once
 // Week is selected — force List there, and restore Calendar (the default,
@@ -256,16 +311,26 @@ watch(
 
 function shiftViewMonth(delta: number) {
   const d = viewDate.value;
+  // Date's constructor normalizes month overflow/underflow on its own (month
+  // 12 becomes January of the next year, month -1 becomes December of the
+  // previous year) — paging month-by-month already rolls the year over for
+  // free, which is what let the old dedicated year chevron-pair row go away.
   viewDate.value = new Date(d.getFullYear(), d.getMonth() + delta, 1);
 }
 
-function shiftViewYear(delta: number) {
+function jumpToYear(year: number) {
   const d = viewDate.value;
-  viewDate.value = new Date(d.getFullYear() + delta, d.getMonth(), 1);
+  viewDate.value = new Date(year, d.getMonth(), 1);
 }
 
 const viewMonthLabel = computed(() => viewDate.value.toLocaleDateString(undefined, { month: "long" }));
 const viewYearLabel = computed(() => String(viewDate.value.getFullYear()));
+// ±5 years around whatever month is currently displayed — recenters itself
+// each time you jump, so repeated jumps don't wander out of the list.
+const yearOptions = computed(() => {
+  const base = viewDate.value.getFullYear();
+  return Array.from({ length: 11 }, (_, i) => base - 5 + i);
+});
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -320,6 +385,13 @@ const isToday = computed(() => isSameLocalDay(new Date().toISOString(), props.se
 
 function onPickDate(date: Date) {
   emitDate(date);
+  // No longer auto-collapses on pick (removed per Peter's feedback,
+  // 2026-07-17) — the grid used to close itself after every single date
+  // click, which made it unusable for browsing several dates in a row (open
+  // it, look at one day, want to check the next, have to reopen it every
+  // time). Expand/collapse is now a pure toggle driven only by the date
+  // label click (see calendarExpanded above) — picking a date changes the
+  // selection but leaves the grid exactly as the user left it.
 }
 
 function shiftRange(delta: number) {
@@ -480,6 +552,35 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   max-width: 140px;
   font-size: 0.75rem;
 }
+/* Compact date-nav strip label (replaces the old .bw-panel__subtitle line —
+   UI/UX pass 2026-07-17). A real <button> (doubles as the month-calendar
+   expand/collapse trigger, extended same day) rather than a plain div —
+   reset to look like text at rest, with a hover/active glass treatment so
+   it reads as clickable without competing with the chevrons beside it. */
+.bw-date-nav-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  min-width: 128px;
+  justify-content: center;
+  border: none;
+  border-radius: var(--glass-radius-md);
+  background: transparent;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.bw-date-nav-label:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.bw-date-nav-label--active {
+  background: rgba(124, 111, 238, 0.16);
+  color: #b3a9ff;
+}
 /* Hand-built mini month calendar (replaces Quasar's q-date, 2026-07-16) —
    Peter's ask was for it to fill the panel's full width, which q-date never
    did (its day-cell buttons are a fixed pixel size, not width-relative, so
@@ -499,7 +600,7 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   width: 100%;
 }
 .bw-mini-cal__nav {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .bw-mini-cal__nav-label {
   font-size: 0.8rem;
@@ -507,6 +608,15 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   color: #fff;
   min-width: 44px;
   text-align: center;
+}
+/* Year jump dropdown (replaces the old dedicated year chevron-pair row,
+   UI/UX pass 2026-07-17) — sized to match .bw-mini-cal__nav-label's weight
+   so "July" and "2026" read as one continuous label despite one being a
+   plain span and the other a button. */
+.bw-mini-cal__year-dropdown :deep(.q-btn__content) {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #fff;
 }
 .bw-mini-cal__weekdays {
   display: grid;
@@ -521,21 +631,30 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
 .bw-mini-cal__grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  grid-auto-rows: 22px;
+  /* Height dropped to 26px (from 36px, UI/UX pass 2026-07-17 — Peter asked
+     twice for this to be thinner) while keeping width at 34px — decoupled
+     on purpose. 22px (the original size, before the touch-target fix a few
+     revisions back) was well under the 44x44px guideline; going back to a
+     square cell to save height would repeat that mistake. A wide-but-short
+     cell keeps a reasonable tap target (34×26 ≈ 884px² vs. a 30×30 square's
+     900px²) while actually addressing "too tall", which is specifically a
+     vertical complaint. Rounded-rect instead of a circle below, since a
+     circle needs equal width/height to not look stretched. */
+  grid-auto-rows: 26px;
   row-gap: 2px;
 }
 .bw-mini-cal__cell {
-  width: 22px;
-  height: 22px;
+  width: 34px;
+  height: 26px;
   margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 50%;
+  border-radius: 8px;
   background: transparent;
   color: #e7e8ec;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   line-height: 1;
   cursor: pointer;
 }

@@ -17,3 +17,8 @@ local_cache/
 vite.config.ts.timestamp-*.mjs
 dashboard/src/**/*.js
 logs/
+
+# Python bytecode cache — shows up under any installed skill with .py
+# scripts (e.g. .claude/skills/*/scripts/) the first time they're run.
+__pycache__/
+*.pyc

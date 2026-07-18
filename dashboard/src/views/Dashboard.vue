@@ -40,7 +40,12 @@
         />
       </div>
       <div class="col-12 col-sm-6 col-md-3">
-        <StatTile label="Overdue" :value="overdueCount" sublabel="open items past 3 days" />
+        <StatTile
+          label="Overdue"
+          :value="overdueCount"
+          sublabel="open items past 3 days"
+          :tone="overdueCount > 0 ? 'danger' : 'default'"
+        />
       </div>
     </div>
 

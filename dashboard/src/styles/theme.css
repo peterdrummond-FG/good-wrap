@@ -4,6 +4,20 @@
  * grouped-list pattern (borrowed almost directly from its Chat History screen
  * for our Meetings Overview / Follow-ups panels).
  *
+ * Restyled 2026-07-17 toward an Apple "Liquid Glass"-inspired material
+ * (Peter's ask, after confirming this app is no longer a throwaway POC —
+ * see project memory). Apple doesn't publish numeric specs for Liquid Glass
+ * (blur radius, opacity, etc. aren't documented — only the HIG's qualitative
+ * description: translucent, layered, specular highlights, content-aware).
+ * The values below are this app's own interpretation, and one HIG principle
+ * we do follow deliberately: glass is reserved for the *chrome* layer
+ * (sidebar, header, floating panels, buttons, tiles, inputs, popups) — not
+ * for ordinary content rows/cards, which stay solid/opaque so text stays
+ * legible and we're not blurring-on-top-of-blurring. See --glass-* tokens
+ * below and .bw-row/.bw-overview-item/.bw-review-col/the transcript &
+ * not-processed q-cards on MeetingsView (deliberately NOT glass) vs.
+ * .bw-panel/.bw-drawer/.bw-header/.bw-stat-tile (glass).
+ *
  * Approach: override Quasar's own CSS custom properties (works with the
  * precompiled quasar/src/css/index.sass we already import in main.ts — no
  * need to touch the SCSS variable-file build path) plus a handful of custom
@@ -18,24 +32,121 @@
 
   /* Not Quasar variables — our own tokens for the extra surface levels the
      reference design uses (panel card bg sits above the page bg; row/bubble
-     bg sits above the panel bg). */
+     bg sits above the panel bg). These stay opaque — the "content" tier,
+     deliberately not glass (see file header comment). */
   --bw-surface: #202127;
   --bw-surface-raised: #2a2b31;
   --bw-border: rgba(255, 255, 255, 0.08);
   --bw-text-dim: #9195a0;
+
+  /* Darker than --q-primary specifically for white text sitting on top of it
+     (active nav item) — #7c6fee under white text measures 3.91:1, below the
+     4.5:1 WCAG AA minimum for this text size/weight. This shade measures
+     ~6.2:1. Scoped to its own variable rather than changing --q-primary
+     itself, since that variable is also used unmodified elsewhere (splitter
+     hover, focus rings) where the contrast math is different. */
+  --bw-nav-active-bg: #5a4fc8;
+
+  /* --- glass ("chrome" tier) tokens, added 2026-07-17 --------------------- */
+  --glass-blur: 28px;
+  --glass-saturate: 200%;
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-highlight: rgba(255, 255, 255, 0.16);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.34);
+  --glass-radius-lg: 22px;
+  --glass-radius-md: 14px;
+  /* Panel/drawer/tile backgrounds: translucent versions of --bw-surface, so
+     the ambient glow (body::before below) reads through them. Lower alpha
+     than the first pass (0.62 → 0.46) — at 0.62 the blur/tint was barely
+     perceptible against the ambient glow's own low opacity; 0.46 lets enough
+     of the glow's color bleed through to actually read as glass instead of
+     "the same dark panel with a slightly softer corner." */
+  --glass-panel-bg: rgba(32, 33, 39, 0.46);
+  --glass-drawer-bg: rgba(23, 24, 28, 0.58);
 }
 
 body {
   background: var(--q-dark-page);
 }
 
-/* --- panel cards (Meetings / Meetings Overview / Follow-ups / Ask) -------- */
+/* Ambient glow behind everything — without it, glass panels have nothing of
+   interest to blur/refract (the page bg alone is a flat color, so blurring
+   it is a no-op visually). Fixed + negative z-index keeps it pinned behind
+   in-flow content (the #app root has no explicit z-index/position, so it
+   paints above negative-z-index siblings per normal stacking rules) without
+   scrolling away or intercepting clicks. Bumped up from the first pass,
+   which was tuned so subtle it barely showed through the glass panels at
+   their original 0.62 opacity — now sized/opaque enough to actually read as
+   color bleeding through frosted glass, still soft enough not to fight with
+   foreground content. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(800px circle at 10% 10%, rgba(124, 111, 238, 0.32), transparent 62%),
+    radial-gradient(850px circle at 92% 85%, rgba(94, 173, 238, 0.22), transparent 62%),
+    radial-gradient(650px circle at 55% 105%, rgba(224, 182, 103, 0.16), transparent 62%);
+}
+
+/* --- shared glass mixin (applied directly, CSS has no @mixin) ------------
+   Used by .bw-panel, .bw-drawer, .bw-header, .bw-stat-tile, and .q-menu. */
+.bw-panel,
+.bw-drawer,
+.bw-header,
+.q-menu {
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* Vue forwards a component's `class` attr onto whatever QDrawer treats as
+   its "root" for attrs purposes, which turns out to be the inner
+   .q-drawer__content div (App.vue's class="bw-drawer") — NOT the actual
+   <aside class="q-drawer ..."> that sits outside it. That aside keeps
+   Quasar's own opaque dark-mode background, which sat *behind* our
+   translucent .bw-drawer content div and blocked the ambient glow from ever
+   reaching it — the drawer looked like a flat solid panel no matter what
+   .bw-drawer's own background was set to. Neutralizing the aside's own
+   background directly (global, not scoped — .bw-drawer's scoped rule can't
+   reach an element outside its own component template) fixes that. Only
+   one drawer in this app, so this is safe as a blanket override. */
+.q-drawer {
+  background: transparent !important;
+}
+
+/* --- panel cards (Meetings / Meetings Overview / Follow-ups / Ask) --------
+   The background-image sheen is the specular-highlight part of the "glass"
+   read — a soft light catching the top-left corner, fading out by the
+   panel's midpoint, layered under the solid glass-panel-bg tint. */
 .bw-panel {
-  background: var(--bw-surface);
-  border: 1px solid var(--bw-border);
-  border-radius: 16px;
+  background: radial-gradient(120% 60% at 15% 0%, rgba(255, 255, 255, 0.1), transparent 55%), var(--glass-panel-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-lg);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
   height: 100%;
   min-height: 0;
+  /* overflow: hidden — a short panel's own inner content (the calendar's
+     absolutely positioned hour timeline, in particular) would otherwise
+     paint straight past its own rounded corners once shrunk small enough.
+     Doesn't affect popups/dropdowns anywhere in the app (q-menu/
+     q-btn-dropdown content is teleported to a global overlay layer, not a
+     DOM child of the panel), so this is safe as a blanket rule.
+
+     flex-wrap: nowrap — Quasar's `column` utility class (applied in the
+     template alongside this one) sets flex-wrap: wrap by default, which is
+     harmless as long as a panel is always tall enough for its own content.
+     It wasn't on the Meetings page's mobile stacked layout: the calendar
+     panel's header (title/select + date-nav + scope/mode rows) didn't fit
+     in the height the mobile media query below gave it, and flex-wrap:wrap
+     responded by starting a *second column* — the panel's body ended up
+     squeezed into a ~48px sliver wedged to the right of the header instead
+     of stacked underneath it, with a stray hour label rendering off in that
+     sliver. Forcing nowrap here means overflow content simply gets clipped
+     (by the overflow: hidden above) or scrolled (.bw-panel__body's own
+     overflow-y: auto) instead of relayouting sideways. */
+  overflow: hidden;
+  flex-wrap: nowrap;
 }
 
 /* The dashboard's 3-column splitter layout sizes itself off this container,
@@ -169,10 +280,13 @@ body {
   background: var(--bw-border);
 }
 
-/* --- list rows (meetings, follow-ups) ------------------------------------ */
+/* --- list rows (meetings, follow-ups) ------------------------------------
+   Deliberately solid/opaque, not glass — this is content, not chrome (see
+   file header comment). Radius bumped to match the rounder, softer language
+   used everywhere else in this pass. */
 .bw-row {
   background: var(--bw-surface-raised);
-  border-radius: 10px;
+  border-radius: var(--glass-radius-md);
   padding: 10px 14px;
   margin-bottom: 6px;
   cursor: pointer;
@@ -202,6 +316,7 @@ body {
   border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .bw-pill--processed {
   background: rgba(124, 111, 238, 0.18);
@@ -237,31 +352,61 @@ body {
   color: #a0aec0;
 }
 
-/* --- sidebar nav ----------------------------------------------------------- */
+/* --- stat tile severity (added for UI/UX pass, 2026-07-17) ---------------
+   Stat tiles otherwise render every number identically (white on dark),
+   which gives "Overdue" the same visual weight as a neutral count like
+   "Needs Approval" — nothing signals that overdue items are the urgent one.
+   Reuses the same red already established for urgency-high pills so the
+   "this needs attention" color means the same thing everywhere in the app. */
+.bw-stat-tile--danger .bw-stat-tile__value {
+  /* !important: this ties on specificity with StatTile.vue's own scoped
+     `.bw-stat-tile__value { color: #fff }` (class+attribute selectors count
+     equal to two classes), so which one wins depends on Vite's dev-time
+     style-injection order rather than anything meaningful — verified this
+     rule silently lost that tie after an unrelated edit to StatTile.vue's
+     <style> block reordered injection. A deliberate semantic override like
+     "this number is urgent" shouldn't be at the mercy of build-order
+     coincidence. */
+  color: #fc8181 !important;
+}
+
+/* --- sidebar nav -----------------------------------------------------------
+   Gap/padding/font trimmed a notch (from 12px/10px 14px/0.88rem, UI/UX pass
+   2026-07-17) to match the drawer itself narrowing from 240px to 188px —
+   the wider spacing was sized for the old width and started crowding the
+   label text against the drawer edge once the column got thinner. */
 .bw-nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-radius: 10px;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--glass-radius-md);
   color: #c7c9d1;
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   text-decoration: none;
   margin-bottom: 4px;
+  transition: background 0.15s ease;
 }
 .bw-nav-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.06);
 }
 .bw-nav-item--active {
-  background: var(--q-primary);
+  /* Subtle top-highlight glass sheen over the flat --bw-nav-active-bg base —
+     kept to 10% white so the white-text contrast measured for the flat
+     color underneath (~6.2:1) doesn't erode below the 4.5:1 AA minimum;
+     verified at 10% it still lands ~5:1. */
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 60%), var(--bw-nav-active-bg);
   color: #fff;
+  box-shadow: 0 2px 10px rgba(90, 79, 200, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
-/* --- Meetings Overview: name-as-reminder + top takeaways ------------------ */
+/* --- Meetings Overview: name-as-reminder + top takeaways ------------------
+   Deliberately solid/opaque, not glass — content tier (see file header
+   comment), same as .bw-row. */
 .bw-overview-item {
   background: var(--bw-surface-raised);
-  border-radius: 10px;
+  border-radius: var(--glass-radius-md);
   padding: 10px 14px;
   margin-bottom: 6px;
 }
@@ -340,13 +485,49 @@ body {
   overflow-y: auto;
 }
 
+/* Below the drawer's own breakpoint (found in a live UI/UX review,
+   2026-07-17 — this was completely broken, not just cramped): the calendar
+   column's fixed 360px width left zero room for the detail pane once a
+   meeting was selected. Measured it collapsing to literally 0px and sitting
+   off-screen at a 375px viewport — the page was unusable for its actual
+   job (reading a meeting's takeaways/action items) on any narrow screen.
+   Stacking the two panels instead of running them side by side fixes that;
+   the calendar panel gets a fixed share of the viewport height (still
+   internally scrollable, same as always) rather than fighting the detail
+   pane for width. */
+@media (max-width: 699px) {
+  .bw-meetings-layout {
+    flex-direction: column;
+  }
+  .bw-meetings-layout__calendar {
+    width: 100%;
+    /* A percentage flex-basis here (45%, the first-pass value) doesn't
+       reliably resolve against this column's own height, which depends on
+       a chain of ancestors (.bw-meetings-layout -> .bw-meetings-page) that
+       isn't a "definite" size as far as the flexbox spec's percentage-basis
+       resolution is concerned — it silently fell back to content-based
+       auto-sizing instead, shrinking the panel to just barely fit its own
+       header with no room left for its body (see the flex-wrap: nowrap
+       comment on .bw-panel above for what that broke). A viewport-relative
+       height sidesteps the whole "is the parent's size definite" question. */
+    height: 45vh;
+    flex: 0 0 auto;
+  }
+  .bw-meetings-layout__detail {
+    width: 100%;
+    height: auto;
+    flex: 1 1 auto;
+  }
+}
+
 /* --- meeting detail review columns (added 2026-07-16) --------------------
    Takeaways/Action Items/Follow-ups shown side by side with checkboxes so
-   Peter can quickly approve across categories without switching views. */
+   Peter can quickly approve across categories without switching views.
+   Solid/opaque, not glass — content tier (see file header comment). */
 .bw-review-col {
   background: var(--bw-surface-raised);
   border: 1px solid var(--bw-border);
-  border-radius: 10px;
+  border-radius: var(--glass-radius-md);
   padding: 10px;
   height: 100%;
 }
@@ -380,15 +561,153 @@ body {
    bubble element (.q-message-text), not `bg-{color}` as Quasar's naming
    convention would suggest elsewhere — confirmed by inspecting the rendered
    DOM. Defining both here so the bubble works regardless of which prop
-   Quasar ends up using in a future version. */
+   Quasar ends up using in a future version. Solid/opaque, not glass —
+   content tier (see file header comment). */
 .bg-chat-user,
 .text-chat-user {
   background: var(--bw-surface-raised) !important;
   color: #fff !important;
+  border-radius: var(--glass-radius-md) !important;
 }
 .bg-chat-assistant,
 .text-chat-assistant {
   background: var(--bw-surface) !important;
   border: 1px solid var(--bw-border);
   color: #e7e8ec !important;
+  border-radius: var(--glass-radius-md) !important;
+}
+/* Real bug found in a live end-to-end test, 2026-07-17 (Ask had never
+   actually been exercised with a submitted question + inspected response
+   until this pass) — Quasar renders message text in a further-nested
+   .q-message-text-content div, and its own built-in "--received" variant
+   ships a hardcoded near-black text color (assumes a light bubble in light
+   mode). The "--sent" variant happens to get Quasar's own `text-white` class
+   for free, which is why only the assistant's replies were unreadable
+   (near-black text on a near-black bubble) and not the user's own messages.
+   Pre-existing bug, not something the glass pass introduced — the outer
+   .text-chat-assistant color override above never reached this inner div. */
+.q-message-text-content--received {
+  color: #e7e8ec !important;
+}
+
+/* ==========================================================================
+   Quasar component overrides — glass buttons, inputs, popups. Global (not
+   scoped to one component) since these apply the same way on every page.
+   ========================================================================== */
+
+/* --- buttons --------------------------------------------------------------
+   Every q-btn gets a glass base: translucent fill + blur + a soft lifted
+   shadow, regardless of flat/outline/unelevated variant, so a dense
+   icon-only chevron and a labeled "Save" button read as the same family of
+   control. Rounder corners throughout (14px) except round icon buttons,
+   which stay circular.
+
+   First pass (same day) left outline buttons at 4-9% fill with no shadow —
+   next to an already-translucent glass panel behind them, that read as
+   "thin colored border, basically invisible surface" rather than glass
+   (Peter's "these buttons are ugly" reaction). This pass gives every
+   variant real depth: a visible frosted fill, a top-left sheen matching
+   panels/tiles, and a soft drop shadow for lift off the panel behind it. */
+.q-btn {
+  border-radius: var(--glass-radius-md);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+.q-btn--round {
+  border-radius: 50%;
+}
+/* Flat buttons (icon-only chevrons/menu toggles) — lighter treatment than
+   outline/solid since these are meant to recede until interacted with, but
+   still a visible glass surface, not a bare icon floating on nothing. */
+.q-btn.q-btn--flat {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.q-btn.q-btn--flat:hover {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+/* Outline buttons (Reprocess/Edit/Delete) — Quasar already draws the
+   currentColor border; layered sheen + a real drop shadow give these actual
+   glass depth instead of a flat ghost-button look. */
+.q-btn.q-btn--outline {
+  background: radial-gradient(120% 150% at 25% 0%, rgba(255, 255, 255, 0.16), transparent 60%),
+    rgba(255, 255, 255, 0.08);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.q-btn.q-btn--outline:hover {
+  background: radial-gradient(120% 150% at 25% 0%, rgba(255, 255, 255, 0.22), transparent 60%),
+    rgba(255, 255, 255, 0.13);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+/* Solid/unelevated primary buttons (Save, Capture meeting, Ask, Process this
+   meeting, Upload & capture) — a top-down sheen plus lifted shadow gives the
+   flat brand-purple fill a glassy, slightly domed feel instead of a flat
+   block of color. 10% highlight opacity (not more) — verified this keeps
+   the white-text contrast safely above 4.5:1 (same margin math as
+   .bw-nav-item--active above). */
+.q-btn.bg-primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 55%), var(--q-primary) !important;
+  box-shadow: 0 4px 16px rgba(124, 111, 238, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+.q-btn.bg-primary:hover {
+  box-shadow: 0 6px 20px rgba(124, 111, 238, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+/* --- segmented controls (Day/Week, calendar/list mode toggles) ------------
+   Quasar's q-btn-toggle renders each option as its own separate q-btn — left
+   at the per-button styling above, that reads as two/three disconnected
+   pills rather than one control. Wrapping them in a single frosted capsule
+   (the group container gets the glass surface; individual buttons go flat
+   and square so the group's own rounded+clipped edges define the shape)
+   matches Apple's actual segmented-control pattern more closely, and is a
+   more recognizably "glass" read than loose buttons floating in a row. */
+.q-btn-group {
+  background: radial-gradient(120% 150% at 25% 0%, rgba(255, 255, 255, 0.1), transparent 60%), rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+.q-btn-group .q-btn {
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* The active segment keeps its own solid-purple sheen (.bg-primary above)
+   but drops the outer drop-shadow — the group container already casts one,
+   and an inner drop-shadow gets visually clipped weirdly by the group's own
+   overflow:hidden. */
+.q-btn-group .q-btn.bg-primary {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
+}
+
+/* --- filled inputs (Capture form, Ask box, People search) ------------------
+   Quasar's filled style is a solid box with a bottom underline bar by
+   default — replaced with a fully-rounded glass field and a focus glow
+   instead of the underline, matching the rounder language used elsewhere. */
+.q-field--filled .q-field__control {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-radius: var(--glass-radius-md) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+.q-field--filled .q-field__control:before,
+.q-field--filled .q-field__control:after {
+  border: none !important;
+}
+.q-field--filled.q-field--focused .q-field__control {
+  box-shadow: 0 0 0 2px rgba(124, 111, 238, 0.45);
+}
+
+/* --- popups (company picker menus, q-btn-dropdown) ------------------------- */
+.q-menu {
+  background: rgba(30, 31, 36, 0.82) !important;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  box-shadow: var(--glass-shadow);
 }

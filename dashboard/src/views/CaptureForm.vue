@@ -1,5 +1,5 @@
 <template>
-  <q-page padding style="max-width: 700px">
+  <q-page padding style="max-width: 700px; margin: 0 auto">
     <div class="bw-panel q-pa-lg">
       <div class="bw-panel__title q-mb-xs">Capture a meeting</div>
       <div class="bw-panel__subtitle q-mb-md">
