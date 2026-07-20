@@ -360,6 +360,21 @@ export interface MeetingDetail {
   } | null;
 }
 
+// --- source-key dedup (added 2026-07-20, folder-scan reliability pass) -----------
+// Mirrors captureFromZoomWebhook.ts's zoomMeetingId check-before-insert shape —
+// same idea, generalized to any scripted/unattended capture path. Lets the
+// upload-processed route (app.ts) detect "this transcript was already
+// captured" (e.g. a retried upload after the scripted process died between
+// capturing and its own bookkeeping) instead of creating a duplicate meeting.
+export async function findMeetingBySourceKey(sourceKey: string): Promise<{ id: string } | null> {
+  const [existing] = await db
+    .select({ id: schema.meetings.id })
+    .from(schema.meetings)
+    .where(eq(schema.meetings.sourceKey, sourceKey))
+    .limit(1);
+  return existing ?? null;
+}
+
 export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail | null> {
   const [row] = await db
     .select({

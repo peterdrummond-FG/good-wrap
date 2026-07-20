@@ -192,6 +192,13 @@ export const meetings = pgTable(
       .notNull()
       .references(() => users.id),
     zoomMeetingId: text("zoom_meeting_id"), // nullable — populated only for source = 'zoom'
+    // Nullable — an idempotency key for unattended/scripted capture paths
+    // (folder-scan today, populated as `sha256:<hex>` of the raw transcript
+    // text — see scanFolder.ts's cmdClaim). Same role as zoomMeetingId above,
+    // generalized beyond just Zoom: lets a retried upload (e.g. after the
+    // scripted process died between capturing and its own bookkeeping)
+    // detect "this was already captured" instead of creating a duplicate.
+    sourceKey: text("source_key"),
     topic: text("topic").notNull(),
     startTime: timestamp("start_time", { withTimezone: true }).notNull(),
     durationMinutes: integer("duration_minutes"),
@@ -211,6 +218,9 @@ export const meetings = pgTable(
     zoomMeetingIdUnique: uniqueIndex("meetings_zoom_meeting_id_unique")
       .on(table.zoomMeetingId)
       .where(sql`${table.zoomMeetingId} is not null`),
+    sourceKeyUnique: uniqueIndex("meetings_source_key_unique")
+      .on(table.sourceKey)
+      .where(sql`${table.sourceKey} is not null`),
     companyIdIdx: index("meetings_company_id_idx").on(table.companyId),
   })
 );

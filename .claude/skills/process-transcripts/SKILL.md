@@ -30,10 +30,23 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
    problem — they load `.env` themselves via `dotenv/config`, transitively
    imported through `src/db/client.ts`).
 
-1. Run `npm run scan-folder -- list`. This prints a JSON array of candidate
-   filenames. If it's empty, say so and stop — nothing to do.
+1. Run `npm run scan-folder -- reconcile`. This un-claims any `.processing/`
+   file whose claim has gone stale (a previous run died mid-file — a Claude
+   usage session-limit hit or a network drop, both real failure modes seen
+   in practice) by moving it back to the top-level watch folder, so the next
+   step picks it up as a fresh candidate. It's always safe to re-process an
+   unclaimed file this way, even if the dead run's upload had actually
+   already succeeded before it crashed — the `sourceKey` dedup check in step
+   4c below turns a re-upload into a no-op instead of a duplicate meeting.
+   Prints `{ unclaimed: [{filename, staleForMs}], failedCount }`. Note any
+   `unclaimed` filenames and the `failedCount` (files already sitting in
+   `failed/`, awaiting Peter's manual fix) for your final summary in step 5.
 
-2. Fetch context you'll need for insight generation, once per run (not per
+2. Run `npm run scan-folder -- list`. This prints a JSON array of candidate
+   filenames. If it's empty, say so and stop — nothing to do (but still
+   report the reconcile/failed counts from step 1 if either was nonzero).
+
+3. Fetch context you'll need for insight generation, once per run (not per
    file), using the base URL from step 0:
    - `curl -s "<GOODWRAP_API_BASE_URL>/api/me"` → the owner's name. Action
      items are THIS person's own tasks; follow-ups are never attributed to
@@ -46,10 +59,10 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
      each with a `slug`, `name`, and `aliases` — for classifying which
      company each meeting is about (see the **company** rule below).
 
-3. For each candidate filename, one at a time:
+4. For each candidate filename, one at a time:
 
    a. Run `npm run scan-folder -- claim "<filename>"`. This locks the file
-      and prints `{ "rawText": "...", "parsed": {...} | null }`.
+      and prints `{ "rawText": "...", "parsed": {...} | null, "sourceKey": "..." }`.
       - If `parsed` is non-null, it already has `topic`, `startTime`,
         `durationMinutes`, `participants` (Peter's fixed export format was
         matched — trust these values, don't second-guess them).
@@ -61,6 +74,9 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
         just read the text.
       - The transcript body to store is `parsed.transcript` when `parsed` is
         non-null, otherwise the full `rawText`.
+      - `sourceKey` is already computed for you (a deterministic hash of
+        `rawText`) — carry it through unchanged into the upload payload in
+        step (c) below. Don't recompute or alter it.
 
    b. Generate the 4 categories from the transcript body, following these
       rules exactly (same bar as the API-based path used for every other
@@ -112,7 +128,7 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
         over-generating for these two categories (not for takeaways, which
         stays exactly 5).
       - **company**: which ONE of the companies from `/api/companies` (step
-        2) this meeting is actually about — use its `slug`. Match on the
+        3) this meeting is actually about — use its `slug`. Match on the
         company's `name`, its `aliases`, attendee affiliations, or clear
         subject-matter context (e.g. product/program names unique to one
         company), not just a passing one-word mention. If the meeting is
@@ -130,7 +146,7 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       curl -s -X POST "<GOODWRAP_API_BASE_URL>/api/meetings/upload-processed" \
         -H "Content-Type: application/json" \
         -H "x-worker-key: <LOCAL_WORKER_API_KEY>" \
-        -d '{"topic": "...", "startTime": "...", "durationMinutes": ..., "participants": [...], "transcript": "...", "insights": {"keywords": [...], "takeaways": [{"text": "..."}], "actionItems": [{"text": "...", "urgency": "..."}], "followUps": [{"text": "...", "person": null, "urgency": "..."}], "company": "some-slug-or-unknown"}}'
+        -d '{"topic": "...", "startTime": "...", "durationMinutes": ..., "participants": [...], "transcript": "...", "insights": {"keywords": [...], "takeaways": [{"text": "..."}], "actionItems": [{"text": "...", "urgency": "..."}], "followUps": [{"text": "...", "person": null, "urgency": "..."}], "company": "some-slug-or-unknown"}, "sourceKey": "<value from claim>"}'
       ```
       (`takeaways`/`actionItems`/`followUps` entries take no `approved`
       field — the server stamps that itself.) Write the JSON body to a temp
@@ -138,8 +154,25 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       @/tmp/upload-payload.json` rather than inlining a large transcript
       directly on the command line.
 
-   d. On a `2xx` response: `npm run scan-folder -- finish "<filename>" processed`.
-      On any failure (claim error, malformed transcript, non-2xx response):
-      `npm run scan-folder -- finish "<filename>" failed --error "<what went wrong>"`.
+      If the response includes `"alreadyCaptured": true`, this was a safe
+      no-op — the meeting already existed from a prior run's upload that
+      succeeded before that run crashed (see step 1). Note it in your
+      summary as "confirmed" rather than "created", but treat it the same as
+      any other 2xx response for the `finish` step below.
 
-4. Report a one-line summary: how many processed, how many failed and why.
+   d. On a `2xx` response: `npm run scan-folder -- finish "<filename>" processed --date "<startTime>"`,
+      using the exact same `startTime` value already sent in the upload
+      payload — this files the archived transcript under the *meeting's*
+      own date, not whatever day the batch happened to run, so a backlog of
+      differently-dated meetings processed in one sitting still lands in
+      the right week folders. (If `startTime` isn't available for some
+      reason, omit `--date` — `finish` falls back to the file's own
+      modification time.)
+      On any failure (claim error, malformed transcript, non-2xx response):
+      `npm run scan-folder -- finish "<filename>" failed --error "<what went wrong>"`
+      (no `--date` here — `failed/` stays flat).
+
+5. Report a one-line summary: how many processed, how many failed and why,
+   how many were reconciled/retried in step 1 (and of those, how many turned
+   out to be `alreadyCaptured` no-ops vs. freshly created), and the
+   `failedCount` from step 1.

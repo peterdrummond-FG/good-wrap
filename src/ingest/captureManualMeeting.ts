@@ -104,6 +104,12 @@ export interface CaptureManualMeetingInput {
    * numeric `id` (which is reused across a recurring meeting's occurrences).
    * Nullable in the schema for manual/upload entries. */
   zoomMeetingId?: string;
+  /** Only set for scripted/unattended capture paths (folder-scan) — an
+   * idempotency key (`sha256:<hex>` of the raw transcript) so a retried
+   * upload can be detected as a duplicate instead of creating a second
+   * meeting. See findMeetingBySourceKey in queries.ts for the dedup check
+   * itself; this field just threads the value through to the insert. */
+  sourceKey?: string;
 }
 
 export interface CaptureManualMeetingResult {
@@ -170,6 +176,7 @@ export async function captureManualMeeting(
         durationMinutes: input.durationMinutes,
         source: input.source ?? "manual",
         zoomMeetingId: input.zoomMeetingId,
+        sourceKey: input.sourceKey,
       })
       .returning({ id: schema.meetings.id });
 

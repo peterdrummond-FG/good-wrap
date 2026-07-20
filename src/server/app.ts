@@ -16,6 +16,7 @@ import {
   deleteActionItem,
   deleteFollowUp,
   deleteMeeting,
+  findMeetingBySourceKey,
   getCurrentUser,
   getMeetingDetail,
   getPersonDetail,
@@ -268,6 +269,7 @@ export function buildApp() {
       participants?: CaptureParticipantInput[];
       transcript?: string;
       insights?: ProcessedInsightsInput;
+      sourceKey?: string;
     };
   }>("/api/meetings/upload-processed", async (req, reply) => {
     const expectedKey = process.env.LOCAL_WORKER_API_KEY;
@@ -283,6 +285,21 @@ export function buildApp() {
         .send({ error: "topic, startTime, transcript, and insights are all required." });
     }
 
+    // Dedup check (added 2026-07-20, folder-scan reliability pass) — if the
+    // scripted caller (scanFolder.ts's cmdClaim) already computed a
+    // sourceKey and this exact transcript was already captured by an earlier
+    // attempt (e.g. a retried upload after the scripted process died between
+    // capturing and its own `finish` bookkeeping), return the existing
+    // meeting as a no-op instead of creating a duplicate. See
+    // findMeetingBySourceKey in queries.ts.
+    if (body.sourceKey) {
+      const existing = await findMeetingBySourceKey(body.sourceKey);
+      if (existing) {
+        const meeting = await getMeetingDetail(existing.id);
+        return reply.code(200).send({ meetingId: existing.id, alreadyCaptured: true, meeting });
+      }
+    }
+
     const insights = validateProcessedInsights(body.insights);
 
     const result = await captureManualMeeting({
@@ -292,6 +309,7 @@ export function buildApp() {
       participants: body.participants ?? [],
       transcript: body.transcript,
       source: "upload",
+      sourceKey: body.sourceKey,
     });
 
     // Lower embedding batch size, same fix and same reason as the
