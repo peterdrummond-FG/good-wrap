@@ -48,7 +48,7 @@
             aria-label="Toggle month calendar"
             @click="calendarExpanded = !calendarExpanded"
           >
-            {{ formattedSelectedRange }}
+            <span class="bw-date-nav-label__text">{{ formattedSelectedRange }}</span>
             <q-icon :name="calendarExpanded ? 'expand_less' : 'expand_more'" size="18px" />
           </button>
           <q-btn flat round dense size="sm" icon="chevron_right" @click="shiftRange(1)" />
@@ -68,6 +68,7 @@
       <div class="row items-center justify-between no-wrap q-mt-xs">
         <q-btn-toggle
           v-model="scope"
+          class="bw-flat-toggle"
           dense
           no-caps
           unelevated
@@ -85,6 +86,7 @@
         <q-btn-toggle
           v-if="scope === 'day'"
           v-model="mode"
+          class="bw-flat-toggle"
           dense
           unelevated
           toggle-color="primary"
@@ -552,6 +554,39 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   max-width: 140px;
   font-size: 0.75rem;
 }
+/* Day/Week + Calendar/List mode toggles (Peter's ask, 2026-07-20) — the
+   shared segmented-control treatment in theme.css (.q-btn-group: frosted
+   capsule border/shadow + a solid grey-9 fill on the inactive segment) reads
+   as two chunky buttons glued together. These two toggles want a lighter,
+   icon/label-only read instead: no group chrome, each segment transparent
+   at rest, and only a soft purple tint (same recipe as
+   .bw-date-nav-label--active above) marking the active one. Scoped to this
+   one class rather than changing .q-btn-group globally, since Capture's
+   "Type it in / Upload a file" toggle still wants the heavier segmented
+   look. */
+.bw-flat-toggle {
+  background: none;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  gap: 2px;
+}
+.bw-flat-toggle :deep(.q-btn) {
+  border-radius: var(--glass-radius-md) !important;
+}
+.bw-flat-toggle :deep(.q-btn.bg-grey-9) {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.bw-flat-toggle :deep(.q-btn.bg-grey-9:hover) {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+.bw-flat-toggle :deep(.q-btn.bg-primary) {
+  background: rgba(124, 111, 238, 0.16) !important;
+  color: #b3a9ff !important;
+  box-shadow: none !important;
+}
 /* Compact date-nav strip label (replaces the old .bw-panel__subtitle line —
    UI/UX pass 2026-07-17). A real <button> (doubles as the month-calendar
    expand/collapse trigger, extended same day) rather than a plain div —
@@ -565,14 +600,29 @@ const hasAnyListItems = computed(() => listGroups.value.some((g) => g.items.leng
   font-size: 0.85rem;
   font-weight: 600;
   color: #fff;
-  min-width: 128px;
+  /* Fixed (not min-) width — this label's text length swings with the
+     weekday/month name ("Fri, Jul 17" vs "Wednesday, September 3"), and a
+     content-driven width made the chevrons either side hop left/right as
+     you paged through days, chasing the mouse (Peter's report, 2026-07-20).
+     210px comfortably fits the longest realistic string ("Wednesday,
+     September 24" measures ~171px of text alone at this font/weight, plus
+     the expand icon + gap + padding) — overflow/ellipsis below is just a
+     safety net, not the primary fit strategy. */
+  width: 210px;
   justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
   border: none;
   border-radius: var(--glass-radius-md);
   background: transparent;
   padding: 4px 8px;
   cursor: pointer;
   transition: background 0.15s ease;
+}
+.bw-date-nav-label__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .bw-date-nav-label:hover {
   background: rgba(255, 255, 255, 0.08);
