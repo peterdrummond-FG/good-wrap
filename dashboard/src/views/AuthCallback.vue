@@ -19,7 +19,7 @@ import { supabase } from "../lib/supabaseClient";
 const router = useRouter();
 
 onMounted(async () => {
-  await supabase.auth.getSession();
+  if (supabase) await supabase.auth.getSession();
   router.replace("/account");
 });
 </script>

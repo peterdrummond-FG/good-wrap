@@ -36,8 +36,15 @@ const router = createRouter({
   ],
 });
 
+// Mirrors the backend's REQUIRE_AUTH kill switch (src/server/auth.ts) —
+// default off, so the app behaves exactly as it did before login existed
+// until you're actually ready to require it (Supabase Auth providers
+// configured, teammates invited, etc). Flip both this and the backend's
+// REQUIRE_AUTH on together when that's true.
+const REQUIRE_AUTH_ON_CLIENT = import.meta.env.VITE_REQUIRE_AUTH === "true";
+
 router.beforeEach(async (to) => {
-  if (PUBLIC_PATHS.has(to.path)) return true;
+  if (!REQUIRE_AUTH_ON_CLIENT || PUBLIC_PATHS.has(to.path) || !supabase) return true;
   const {
     data: { session },
   } = await supabase.auth.getSession();

@@ -1,9 +1,14 @@
 // Session + resolved app-user state — shared module-level singleton (same
 // pattern as useCompanies.ts) so every component reads the same reactive
 // session instead of each re-subscribing to Supabase independently.
+//
+// Works fine when Supabase Auth isn't configured at all yet (supabase ===
+// null, see ../lib/supabaseClient.ts) — session/appUser just stay null and
+// initializing resolves immediately, matching the pre-login "no current
+// user" state rather than crashing.
 
 import { ref, type Ref } from "vue";
-import type { Session } from "@supabase/supabase-js";
+import type { AuthError, Session } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabaseClient";
 import { fetchCurrentUser, type CurrentUser } from "../api";
 
@@ -15,15 +20,17 @@ const appUser = ref<CurrentUser | null>(null) as Ref<CurrentUser | null>;
 const initializing = ref(true);
 let started = false;
 
+// Deliberately does NOT gate on session.value being set — the backend
+// resolves a legacy fallback user (DEFAULT_OWNER_EMAIL) for unauthenticated
+// requests whenever its own REQUIRE_AUTH is off (src/server/auth.ts), so
+// GET /api/me still succeeds with no session at all in that rollout state.
+// Once REQUIRE_AUTH is actually on, an unauthenticated call here just fails
+// (401/403) and the catch below leaves appUser null, same as today.
 async function refreshAppUser(): Promise<void> {
-  if (!session.value) {
-    appUser.value = null;
-    return;
-  }
   try {
     appUser.value = (await fetchCurrentUser()).user;
   } catch (err) {
-    // Not invited, or some other resolution failure — no app user yet.
+    // Not signed in, not invited, or some other resolution failure.
     appUser.value = null;
     console.error("Failed to resolve current good-wrap user:", err);
   }
@@ -32,6 +39,13 @@ async function refreshAppUser(): Promise<void> {
 function start(): void {
   if (started) return;
   started = true;
+
+  if (!supabase) {
+    void refreshAppUser().finally(() => {
+      initializing.value = false;
+    });
+    return;
+  }
 
   void supabase.auth.getSession().then(async ({ data }) => {
     session.value = data.session;
@@ -47,14 +61,28 @@ function start(): void {
 
 const redirectTo = () => `${window.location.origin}/auth/callback`;
 
+const notConfiguredError = (): { data: { provider: null; url: null }; error: AuthError } => ({
+  data: { provider: null, url: null },
+  error: {
+    name: "AuthUnavailableError",
+    message: "Supabase Auth isn't configured yet — set VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY (see .env.example).",
+  } as AuthError,
+});
+
 export function useAuth() {
   start();
   return {
     session,
     appUser,
     initializing,
-    signInWithGoogle: () => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: redirectTo() } }),
-    signInWithMicrosoft: () => supabase.auth.signInWithOAuth({ provider: "azure", options: { redirectTo: redirectTo() } }),
-    signOut: () => supabase.auth.signOut(),
+    signInWithGoogle: () =>
+      supabase
+        ? supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: redirectTo() } })
+        : Promise.resolve(notConfiguredError()),
+    signInWithMicrosoft: () =>
+      supabase
+        ? supabase.auth.signInWithOAuth({ provider: "azure", options: { redirectTo: redirectTo() } })
+        : Promise.resolve(notConfiguredError()),
+    signOut: () => (supabase ? supabase.auth.signOut() : Promise.resolve({ error: null })),
   };
 }

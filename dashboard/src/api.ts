@@ -138,10 +138,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // current Supabase session's token, if any, so the backend's requireAuth
   // (src/server/auth.ts) can resolve who's calling. getSession() resolves
   // near-instantly from local storage/memory once the client has
-  // initialized; it's not a network round trip on every call.
+  // initialized; it's not a network round trip on every call. `supabase` is
+  // null when Auth isn't configured yet (see lib/supabaseClient.ts) — no
+  // token is sent then, same as before login existed; the backend's own
+  // REQUIRE_AUTH=false fallback (src/server/auth.ts) covers the rest.
   const {
     data: { session },
-  } = await supabase.auth.getSession();
+  } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
   const res = await fetch(`${API_BASE_URL}/api${path}`, {
     ...options,
     headers: {
