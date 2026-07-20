@@ -1,5 +1,6 @@
 <template>
-  <q-layout view="hHh LpR fFf">
+  <router-view v-if="isAuthRoute" />
+  <q-layout v-else view="hHh LpR fFf">
     <q-header class="bw-header" bordered>
       <q-toolbar>
         <q-btn
@@ -50,15 +51,15 @@
 
         <q-space />
 
-        <!-- Added 2026-07-16 — no real auth yet (personal-use POC), but this
-             makes the existing implicit "current user" assumption
-             (DEFAULT_OWNER_EMAIL, see GET /api/me) visible instead of
-             invisible, and gives a place to eventually swap in real
-             session info once this lives inside the hub app. -->
-        <div v-if="currentUser" class="text-caption text-grey-6 q-pa-sm">
-          Signed in as <span class="text-grey-4">{{ currentUser.name }}</span>
+        <!-- Real session info (Supabase Auth SSO, 2026-07-20) — replaces the
+             old DEFAULT_OWNER_EMAIL stand-in. -->
+        <div v-if="appUser" class="q-pa-sm">
+          <div class="text-caption text-grey-6">
+            Signed in as <span class="text-grey-4">{{ appUser.name }}</span>
+          </div>
+          <q-btn flat dense no-caps size="sm" label="Log out" class="text-grey-6 q-mt-xs" @click="signOut" />
         </div>
-        <div class="text-caption text-grey-7 q-pa-sm">Meeting Intelligence — POC</div>
+        <div class="text-caption text-grey-7 q-pa-sm">Meeting Intelligence</div>
       </div>
     </q-drawer>
 
@@ -69,12 +70,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { useRoute } from "vue-router";
-import { fetchCurrentUser, type CurrentUser } from "./api";
+import { useAuth } from "./composables/useAuth";
 
 const route = useRoute();
-const currentUser = ref<CurrentUser | null>(null);
+const { appUser, signOut } = useAuth();
+
+// Login/callback pages render standalone, no drawer/nav chrome — there's
+// nothing to navigate to yet before a session exists.
+const isAuthRoute = computed(() => route.path === "/login" || route.path === "/auth/callback");
 // Drives the drawer below its 700px breakpoint (see the q-drawer's
 // :breakpoint prop) — above it, show-if-above keeps the drawer docked open
 // regardless of this value. Added for the UI/UX pass, 2026-07-17: previously
@@ -102,6 +107,7 @@ const navItems = [
   { to: "/capture", label: "Capture", icon: "add_circle" },
   { to: "/ask", label: "Ask", icon: "forum" },
   { to: "/people", label: "People", icon: "group" },
+  { to: "/account", label: "Account", icon: "settings" },
 ];
 
 function isActive(to: string): boolean {
@@ -116,17 +122,6 @@ const pageTitle = computed(() => {
   return match?.label ?? "good-wrap";
 });
 
-onMounted(async () => {
-  try {
-    const result = await fetchCurrentUser();
-    currentUser.value = result.user;
-  } catch {
-    // No current user (DEFAULT_OWNER_EMAIL unset/invalid) — leave the
-    // sidebar indicator hidden rather than surfacing an error for something
-    // this minor; the rest of the app will fail loudly elsewhere if this is
-    // actually misconfigured.
-  }
-});
 </script>
 
 <style scoped>

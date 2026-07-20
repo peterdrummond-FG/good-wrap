@@ -1,15 +1,18 @@
-// Server-to-server push of one approved Action Item into Asana as a task —
-// triggered by the manual "Send to Asana" button on the meeting detail
-// page's approved Action Items list (never automatic, and never for
-// Follow-ups — those are explicitly other people's tasks, not Peter's own,
-// see db/schema.ts's meeting_insights comment).
+// Push of one approved Action Item into Asana as a task — triggered by the
+// manual "Send to Asana" button on the meeting detail page's approved
+// Action Items list (never automatic, and never for Follow-ups — those are
+// explicitly other people's tasks, not the owner's own, see
+// db/schema.ts's meeting_insights comment).
 //
-// Requires a Personal Access Token (ASANA_ACCESS_TOKEN) plus a
-// workspace/project to create tasks in (ASANA_WORKSPACE_GID/
-// ASANA_PROJECT_GID — see .env.example). Tasks are created in a dedicated
-// "good-wrap" project rather than Flippen Group's ~100 shared client/team
-// project boards, and with assignee: "me" so they also land in the token
-// owner's personal Asana "My Tasks" list.
+// As of the per-user Asana OAuth work (src/integrations/oauth/), the caller
+// (sendActionItemToAsana in queries.ts) passes the ACTING user's own OAuth
+// access token here when they've connected their own Asana account, so the
+// task is genuinely attributed to them. `accessToken` falls back to the
+// legacy global Personal Access Token (ASANA_ACCESS_TOKEN) when omitted —
+// kept working for anyone who hasn't connected their own account yet (see
+// .env.example). Workspace/project stay shared env vars either way
+// (ASANA_WORKSPACE_GID/ASANA_PROJECT_GID) — everyone's tasks land in the
+// same dedicated "good-wrap" project, only the acting token/assignee changes.
 
 import { requireEnv } from "../util/env";
 
@@ -20,6 +23,9 @@ export interface CreateAsanaTaskInput {
   text: string;
   /** Meeting topic, included in the task notes for context. */
   meetingTopic: string;
+  /** The acting user's own Asana OAuth access token, if they've connected
+   * one. Falls back to the legacy ASANA_ACCESS_TOKEN PAT when omitted. */
+  accessToken?: string;
 }
 
 export interface CreateAsanaTaskResult {
@@ -28,7 +34,7 @@ export interface CreateAsanaTaskResult {
 }
 
 export async function createAsanaTask(input: CreateAsanaTaskInput): Promise<CreateAsanaTaskResult> {
-  const token = requireEnv("ASANA_ACCESS_TOKEN");
+  const token = input.accessToken ?? requireEnv("ASANA_ACCESS_TOKEN");
   const workspace = requireEnv("ASANA_WORKSPACE_GID");
   const project = requireEnv("ASANA_PROJECT_GID");
 

@@ -93,6 +93,11 @@ export const notificationStatusEnum = pgEnum("notification_status", [
 // (re)processing must never overwrite meetings.company_id again — see
 // applyAiCompanyGuess in queries.ts.
 export const companySourceEnum = pgEnum("company_source", ["ai", "manual"]);
+// Added 2026-07-20 alongside real per-user login (Supabase Auth SSO) and
+// per-user OAuth connections — see src/server/auth.ts and the
+// user_integrations/worker_api_keys tables below.
+export const userRoleEnum = pgEnum("user_role", ["admin", "member"]);
+export const integrationProviderEnum = pgEnum("integration_provider", ["zoom", "asana"]);
 
 // --- users ---------------------------------------------------------------------
 // The people who own/log in to the system. Peter is the only row today, but
@@ -102,7 +107,83 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  // Supabase Auth's own user id (auth.users.id) — null until this person's
+  // first SSO login. First-login auto-link matches by email (see
+  // src/server/auth.ts's requireAuth), so a row can be pre-created by an
+  // admin (inviting a teammate) with this left null until they actually sign
+  // in for the first time.
+  supabaseUserId: uuid("supabase_user_id").unique(),
+  // 'admin' can invite teammates (POST /api/admin/users) and revoke anyone's
+  // worker keys; everyone else is 'member'. Peter's existing row defaults to
+  // 'member' at the DB level — promote him by hand once this lands.
+  role: userRoleEnum("role").notNull().default("member"),
+  // Set by an admin to immediately kill a departed teammate's session/API
+  // access (checked by requireAuth) without deleting their historical data.
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
 });
+
+// --- user_integrations -----------------------------------------------------------
+// Per-user OAuth connections (Zoom, Asana today — extensible to more
+// providers later, see src/integrations/oauth/). Distinct from the existing
+// account-wide Zoom Server-to-Server app (src/integrations/zoom.ts) and the
+// legacy global Asana PAT (src/integrations/asana.ts) — this table is what
+// lets an action be attributed to the individual person who connected their
+// own account, not a shared bot/token. Tokens are encrypted at rest by the
+// application layer (src/util/tokenCrypto.ts) before ever reaching this
+// table — the *_ciphertext columns never hold plaintext.
+export const userIntegrations = pgTable(
+  "user_integrations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: integrationProviderEnum("provider").notNull(),
+    providerAccountId: text("provider_account_id"),
+    providerAccountEmail: text("provider_account_email"),
+    accessTokenCiphertext: text("access_token_ciphertext").notNull(),
+    refreshTokenCiphertext: text("refresh_token_ciphertext"),
+    scope: text("scope"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("user_integrations_user_id_idx").on(table.userId),
+    userProviderUnique: uniqueIndex("user_integrations_user_id_provider_key").on(
+      table.userId,
+      table.provider
+    ),
+  })
+);
+
+// --- worker_api_keys ---------------------------------------------------------------
+// Per-user API keys authenticating the local watch-folder upload
+// (POST /api/meetings/upload-processed) — replaces the single global
+// LOCAL_WORKER_API_KEY shared secret. Supports multiple keys per user (e.g.
+// one per machine), each independently revocable. The raw key (format
+// gw_live_<random>) is shown to the user exactly once at issuance; only its
+// SHA-256 hash is ever persisted here.
+export const workerApiKeys = pgTable(
+  "worker_api_keys",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    keyHash: text("key_hash").notNull().unique(),
+    // First few characters of the raw key, shown in the UI so a user can
+    // recognize which key is which without ever re-displaying the full value.
+    keyPrefix: text("key_prefix").notNull(),
+    label: text("label"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => ({
+    userIdIdx: index("worker_api_keys_user_id_idx").on(table.userId),
+  })
+);
 
 // --- people --------------------------------------------------------------------
 // Normalized identity for anyone who appears as a meeting participant (not
@@ -394,6 +475,16 @@ export const notificationsLog = pgTable(
 // --- relations (optional, for Drizzle's relational query API) ----------------------
 export const usersRelations = relations(users, ({ many }) => ({
   meetings: many(meetings),
+  integrations: many(userIntegrations),
+  workerApiKeys: many(workerApiKeys),
+}));
+
+export const userIntegrationsRelations = relations(userIntegrations, ({ one }) => ({
+  user: one(users, { fields: [userIntegrations.userId], references: [users.id] }),
+}));
+
+export const workerApiKeysRelations = relations(workerApiKeys, ({ one }) => ({
+  user: one(users, { fields: [workerApiKeys.userId], references: [users.id] }),
 }));
 
 export const meetingsRelations = relations(meetings, ({ one, many }) => ({

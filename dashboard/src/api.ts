@@ -2,6 +2,8 @@
 // root). Types here are hand-kept in sync with src/server/queries.ts and
 // app.ts — this is a POC, not worth a shared-types package yet.
 
+import { supabase } from "./lib/supabaseClient";
+
 export type ReviewStatus = "pending" | "needs_review" | "reviewed";
 
 // See db/schema.ts's companies comment — Flippen Group's portfolio companies
@@ -132,10 +134,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // (uploadMeetingTranscript below) must NOT get this header — the browser
   // sets its own multipart/form-data content-type with the correct boundary.
   const isFormData = options?.body instanceof FormData;
+  // Added 2026-07-20 alongside real login — every request now carries the
+  // current Supabase session's token, if any, so the backend's requireAuth
+  // (src/server/auth.ts) can resolve who's calling. getSession() resolves
+  // near-instantly from local storage/memory once the client has
+  // initialized; it's not a network round trip on every call.
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
   const res = await fetch(`${API_BASE_URL}/api${path}`, {
     ...options,
     headers: {
       ...(options?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
       ...options?.headers,
     },
   });
@@ -149,13 +160,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return body as T;
 }
 
-// Added 2026-07-16 alongside GET /api/me (see app.ts) — not real auth, just
-// a way to surface the dashboard's existing implicit "current user"
-// assumption (DEFAULT_OWNER_EMAIL) in the UI instead of it being invisible.
+// Resolved via GET /api/me, which (as of 2026-07-20) reflects whoever the
+// current request's Supabase session/worker key actually authenticated as
+// (see src/server/auth.ts) — not the old DEFAULT_OWNER_EMAIL single-user
+// stand-in.
 export interface CurrentUser {
   id: string;
   name: string;
   email: string;
+  role: "admin" | "member";
 }
 
 export function fetchCurrentUser(): Promise<{ user: CurrentUser }> {
@@ -407,4 +420,97 @@ export interface PersonSummaryResult {
 // (e.g. a "Generate summary" button), never automatically on page load.
 export function fetchPersonSummary(id: string): Promise<PersonSummaryResult> {
   return request(`/people/${id}/summary`, { method: "POST" });
+}
+
+// --- Account page: Zoom/Asana connections, local setup, team (#admin) -------------
+// Backs the single persistent Account screen (AccountPage.vue) — see
+// src/server/routes/{integrations,workerKeys,admin}.ts.
+
+export type IntegrationProviderName = "zoom" | "asana";
+
+export interface IntegrationConnection {
+  provider: IntegrationProviderName;
+  connected: boolean;
+  accountEmail: string | null;
+  connectedAt: string | null;
+}
+
+export function fetchIntegrations(): Promise<{ connections: IntegrationConnection[] }> {
+  return request("/integrations");
+}
+
+export function getIntegrationAuthorizeUrl(
+  provider: IntegrationProviderName
+): Promise<{ authorizeUrl: string }> {
+  return request(`/integrations/${provider}/authorize`);
+}
+
+export function disconnectIntegration(provider: IntegrationProviderName): Promise<Record<string, never>> {
+  return request(`/integrations/${provider}`, { method: "DELETE" });
+}
+
+export interface WorkerKeySummary {
+  id: string;
+  keyPrefix: string;
+  label: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+export function fetchWorkerKeys(): Promise<{ workerKeys: WorkerKeySummary[] }> {
+  return request("/worker-keys");
+}
+
+export interface CreatedWorkerKey {
+  id: string;
+  keyPrefix: string;
+  /** Shown exactly once — never retrievable again after this response. */
+  workerKey: string;
+}
+
+export function createWorkerKey(label?: string): Promise<CreatedWorkerKey> {
+  return request("/worker-keys", { method: "POST", body: JSON.stringify({ label }) });
+}
+
+export function revokeWorkerKey(id: string): Promise<Record<string, never>> {
+  return request(`/worker-keys/${id}`, { method: "DELETE" });
+}
+
+export interface SetupScript {
+  filename: string;
+  contents: string;
+}
+
+// Issues a fresh personal worker key behind the scenes and bakes it into a
+// personalized, downloadable .command file — see
+// src/server/generateSetupScript.ts.
+export function generateSetupScript(): Promise<SetupScript> {
+  return request("/integrations/setup-script", { method: "POST" });
+}
+
+// --- Team (admin-only) -------------------------------------------------------------
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: "admin" | "member";
+  disabledAt: string | null;
+  createdAt: string;
+}
+
+export function fetchAdminUsers(): Promise<{ users: AdminUser[] }> {
+  return request("/admin/users");
+}
+
+// The entire "invite a teammate" mechanism — no invite email is sent; the
+// person just logs in with Google/Microsoft themselves afterward and
+// auto-links to this row by email match (see src/server/auth.ts).
+export function inviteUser(input: { name: string; email: string; role?: "admin" | "member" }): Promise<{ user: AdminUser }> {
+  return request("/admin/users", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function setUserDisabled(id: string, disabled: boolean): Promise<{ ok: true }> {
+  return request(`/admin/users/${id}/disabled`, { method: "POST", body: JSON.stringify({ disabled }) });
 }

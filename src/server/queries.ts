@@ -6,6 +6,7 @@ import { db, schema } from "../db/client";
 import type { ActionItem, FollowUpItem, SuggestionItem, Urgency } from "../../db/schema";
 import { resolveParticipantIds, type CaptureParticipantInput } from "../ingest/captureManualMeeting";
 import { createAsanaTask } from "../integrations/asana";
+import { getValidAccessToken } from "../integrations/oauth/tokenStore";
 
 // --- companies (added 2026-07-17, see db/schema.ts's companies comment) ----------
 
@@ -258,7 +259,28 @@ export interface MeetingListItem {
   company: CompanyRef | null;
 }
 
-export async function listMeetings(): Promise<MeetingListItem[]> {
+// --- per-user meeting scoping (added 2026-07-20 alongside real logins) -----------
+// Now that good-wrap has more than one real user, meetings are private to
+// their owner — see meetings.ownerId (already existed, already an FK to
+// users) and app.ts's requireAuth-resolved req.currentUser.
+
+/** The single per-user access-control checkpoint every route handler that
+ * operates on a specific meeting by id calls before reading/mutating it
+ * (see app.ts) — collapses "doesn't exist" and "exists but isn't yours" into
+ * the same 404, so a route never leaks whether another user's meeting id is
+ * valid. Kept separate from getMeetingDetail so handlers that don't need the
+ * full detail payload (delete, done-toggle, etc.) aren't forced to fetch it
+ * just to check ownership. */
+export async function isMeetingOwnedBy(meetingId: string, ownerId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: schema.meetings.id })
+    .from(schema.meetings)
+    .where(and(eq(schema.meetings.id, meetingId), eq(schema.meetings.ownerId, ownerId)))
+    .limit(1);
+  return Boolean(row);
+}
+
+export async function listMeetings(ownerId: string): Promise<MeetingListItem[]> {
   const meetings = await db
     .select({
       id: schema.meetings.id,
@@ -272,6 +294,7 @@ export async function listMeetings(): Promise<MeetingListItem[]> {
     })
     .from(schema.meetings)
     .leftJoin(schema.companies, eq(schema.companies.id, schema.meetings.companyId))
+    .where(eq(schema.meetings.ownerId, ownerId))
     .orderBy(desc(schema.meetings.startTime));
 
   if (meetings.length === 0) return [];
@@ -470,7 +493,7 @@ export interface ActionItemWithMeeting extends ActionItem {
   index: number;
 }
 
-export async function listFollowUps(): Promise<FollowUpWithMeeting[]> {
+export async function listFollowUps(ownerId: string): Promise<FollowUpWithMeeting[]> {
   const rows = await db
     .select({
       meetingId: schema.meetings.id,
@@ -480,6 +503,7 @@ export async function listFollowUps(): Promise<FollowUpWithMeeting[]> {
     })
     .from(schema.meetingInsights)
     .innerJoin(schema.meetings, eq(schema.meetings.id, schema.meetingInsights.meetingId))
+    .where(eq(schema.meetings.ownerId, ownerId))
     .orderBy(desc(schema.meetings.startTime));
 
   const flattened: FollowUpWithMeeting[] = [];
@@ -502,7 +526,7 @@ export async function listFollowUps(): Promise<FollowUpWithMeeting[]> {
   return flattened;
 }
 
-export async function listActionItems(): Promise<ActionItemWithMeeting[]> {
+export async function listActionItems(ownerId: string): Promise<ActionItemWithMeeting[]> {
   const rows = await db
     .select({
       meetingId: schema.meetings.id,
@@ -512,6 +536,7 @@ export async function listActionItems(): Promise<ActionItemWithMeeting[]> {
     })
     .from(schema.meetingInsights)
     .innerJoin(schema.meetings, eq(schema.meetings.id, schema.meetingInsights.meetingId))
+    .where(eq(schema.meetings.ownerId, ownerId))
     .orderBy(desc(schema.meetings.startTime));
 
   const flattened: ActionItemWithMeeting[] = [];
@@ -785,14 +810,18 @@ export interface SendActionItemToAsanaResult {
 /**
  * Pushes one Action Item to Asana and records the created task's gid on
  * that item, so a later call for the same index is a no-op instead of
- * creating a duplicate task.
+ * creating a duplicate task. Uses the acting user's own connected Asana
+ * account (see src/integrations/oauth/tokenStore.ts) when they have one, so
+ * the task is attributed to them personally — falls back to the legacy
+ * shared PAT (src/integrations/asana.ts) otherwise.
  *
  * Returns null if the meeting/insights don't exist, or index is out of range
  * (caller should 404 either way).
  */
 export async function sendActionItemToAsana(
   meetingId: string,
-  index: number
+  index: number,
+  actingUserId: string
 ): Promise<SendActionItemToAsanaResult | null> {
   const [meeting] = await db
     .select({ topic: schema.meetings.topic })
@@ -812,7 +841,8 @@ export async function sendActionItemToAsana(
     return { taskGid: item.asanaTaskGid, alreadySent: true };
   }
 
-  const { taskGid } = await createAsanaTask({ text: item.text, meetingTopic: meeting.topic });
+  const accessToken = (await getValidAccessToken(actingUserId, "asana")) ?? undefined;
+  const { taskGid } = await createAsanaTask({ text: item.text, meetingTopic: meeting.topic, accessToken });
   actionItems[index] = { ...item, asanaTaskGid: taskGid };
 
   await db
