@@ -78,7 +78,12 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       and prints `{ "rawText": "...", "parsed": {...} | null, "sourceKey": "..." }`.
       - If `parsed` is non-null, it already has `topic`, `startTime`,
         `durationMinutes`, `participants` (Peter's fixed export format was
-        matched — trust these values, don't second-guess them).
+        matched — trust these values, don't second-guess them). Each
+        `participants` entry is `{"name": "...", "email": "..."}` — `email`
+        is only present when it was actually known (e.g. a Zoom-pulled
+        attendee Zoom disclosed an email for); pass entries through to step
+        (c)'s payload exactly as given, `email` included when present and
+        omitted when not.
       - If `parsed` is `null`, the file doesn't match that fixed format.
         Read `rawText` yourself and infer `topic` (a short title),
         `startTime` (ISO timestamp — use the file's own content if it states
@@ -93,11 +98,11 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       - If `parsed.zoomUuid` is present, this file came from the `pull-zoom`
         step — carry it through unchanged as `zoomMeetingId` in the upload
         payload in step (c) below (omit the field entirely otherwise).
-      - If `parsed.hostEmail` is present (also only for a Zoom-pulled file,
-        whose PARTICIPANTS section is intentionally empty), use
-        `participants: [{"email": "<parsed.hostEmail>"}]` in step (c)'s
-        payload instead of `parsed.participants` — this gets a real matched
-        `people` row by email rather than a bare name string.
+      - If `parsed.hostEmail` is present AND `parsed.participants` is empty
+        (only happens for a Zoom-pulled file where fetching the full
+        attendee list failed), use `participants: [{"email": "<parsed.hostEmail>"}]`
+        in step (c)'s payload instead — the one fallback case with a real
+        known participant but an empty `parsed.participants` array.
 
    b. Generate the 4 categories from the transcript body, following these
       rules exactly (same bar as the API-based path used for every other
@@ -155,11 +160,12 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
         company), not just a passing one-word mention. If the meeting is
         Flippen Group's own internal business (not about running any one
         portfolio company specifically), use whichever entry has
-        `isInternal: true`. Use `"unknown"` only when the transcript
-        genuinely gives no usable signal either way — prefer a genuine best
-        guess over defaulting to unknown. This never overrides a company
-        Peter has already set by hand on the meeting detail page (the
-        server enforces that, not this skill).
+        `isInternal: true`. If you're not genuinely confident which company
+        it is — ambiguous, weak, or no usable signal — use `"unknown"`
+        rather than guessing; an incorrect guess is worse than leaving it
+        uncategorized. This never overrides a company Peter has already set
+        by hand on the meeting detail page (the server enforces that, not
+        this skill).
 
    c. POST the result (using the literal base URL and key read in step 0,
       not shell variable references):

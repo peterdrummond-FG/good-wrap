@@ -35,7 +35,12 @@ export interface StructuredTranscriptResult {
   /** ISO timestamp. */
   startTime: string;
   durationMinutes?: number;
-  participants: { name: string }[];
+  /** A plain export's PARTICIPANTS lines are bare names; a Zoom-pulled file
+   * (scanFolder.ts's `pull-zoom`) may instead write "Name <email>" per line
+   * when Zoom disclosed that attendee's email (see
+   * listPastMeetingParticipants in src/integrations/zoom.ts) — `email` is
+   * only set in that case. */
+  participants: { name: string; email?: string }[];
   /** Just the TRANSCRIPT section body — NOT the MEETING INFO/PARTICIPANTS
    * header block, so downstream Claude calls (extractInsights, Q&A) and
    * chunking/embeddings only ever see actual meeting content. */
@@ -46,9 +51,10 @@ export interface StructuredTranscriptResult {
    * manual export, which has no such concept. */
   zoomUuid?: string;
   /** From an optional "Host Email" line in MEETING INFO, same Zoom-pull
-   * origin as zoomUuid above — carried separately from `participants` (a
-   * Zoom-pulled file's PARTICIPANTS section is left empty) so the caller can
-   * attribute a real `{email}` participant instead of a bare name string. */
+   * origin as zoomUuid above. Only present when the Zoom-pull step couldn't
+   * fetch a full attendee list at all (participants list call failed/empty)
+   * — the one fallback case where PARTICIPANTS is left empty and this field
+   * carries the sole known participant (the host) instead. */
   hostEmail?: string;
 }
 
@@ -129,11 +135,18 @@ export function parseStructuredTranscript(
     if (!Number.isNaN(parsed.getTime())) startTime = parsed.toISOString();
   }
 
+  // A Zoom-pulled file may write "Name <email>" per line when Zoom disclosed
+  // that attendee's email — everything else (a plain export's bare names)
+  // has no trailing <...> and just becomes { name }.
+  const PARTICIPANT_WITH_EMAIL_RE = /^(.*?)\s*<([^<>]+)>$/;
   const participants = (sections.get("PARTICIPANTS") ?? "")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !/^fetching/i.test(line))
-    .map((name) => ({ name }));
+    .map((line) => {
+      const match = line.match(PARTICIPANT_WITH_EMAIL_RE);
+      return match ? { name: match[1].trim(), email: match[2].trim() } : { name: line };
+    });
 
   return {
     topic,

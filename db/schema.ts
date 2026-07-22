@@ -206,7 +206,19 @@ export const zoomPendingExports = pgTable(
     topic: text("topic").notNull(),
     startTime: timestamp("start_time", { withTimezone: true }).notNull(),
     durationMinutes: integer("duration_minutes"),
+    // Fallback only — used to render a Zoom-pulled .txt's participants when
+    // `participants` below is empty/unavailable (e.g. the past-meeting
+    // participants API call failed or the meeting had no other attendees).
     hostEmail: text("host_email"),
+    // Full attendee list from Zoom's GET /past_meetings/{uuid}/participants
+    // (see listPastMeetingParticipants in src/integrations/zoom.ts) — each
+    // entry has `email` only when that attendee was logged into a Zoom
+    // account Zoom is willing to disclose (reliably true for the host,
+    // sometimes true for other attendees on the same account; external
+    // guests typically have name only). Null/empty when the call failed or
+    // wasn't attempted — captureFromZoomWebhook.ts falls back to hostEmail
+    // above in that case.
+    participants: jsonb("participants").$type<{ name: string; email?: string }[]>(),
     transcriptText: text("transcript_text").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -236,7 +248,7 @@ export const people = pgTable("people", {
 
 // --- companies -------------------------------------------------------------------
 // Added 2026-07-17: Flippen Group owns several distinct companies
-// (Teachworthy, Teamalytics, Capturing Kids Hearts, Integrous, Galleria,
+// (Teachworthy, Teamalytics, Capturing Kids Hearts, Integrus, Galleria,
 // Maisey, and others still to be added), and there was previously no way to
 // tell which one a given meeting was actually about. Claude infers the best
 // match from the transcript (see extractInsights.ts's `company` tool

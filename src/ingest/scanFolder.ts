@@ -249,6 +249,11 @@ interface ZoomPendingExport {
   startTime: string;
   durationMinutes?: number;
   hostEmail?: string;
+  // Full attendee list from Zoom's past-meeting-participants API (see
+  // src/integrations/zoom.ts's listPastMeetingParticipants and
+  // captureFromZoomWebhook.ts) — empty/absent when that call failed, in
+  // which case renderStructuredTranscript falls back to hostEmail alone.
+  participants?: { name: string; email?: string }[];
   transcriptText: string;
 }
 
@@ -279,17 +284,30 @@ function buildZoomFilename(rec: ZoomPendingExport): string {
   return `zoom_${sanitizeTopicForFilename(rec.topic)}_${formatDateForFilename(rec.startTime)}_${token}.txt`;
 }
 
-// Matches parseStructuredTranscript.ts's exact recognized shape. PARTICIPANTS
-// is deliberately left with zero content lines — the host email travels as
-// a "Host Email" field in MEETING INFO instead (see that file's comment),
-// so the caller can attribute a real {email} participant rather than a bare
-// name string that would create a second, unmatched `people` row.
+// Matches parseStructuredTranscript.ts's exact recognized shape. Two modes:
+// - Full attendee list available (rec.participants non-empty): each line is
+//   "Name <email>" when Zoom disclosed that attendee's email, else just
+//   "Name" — parseStructuredTranscript.ts's PARTICIPANTS parser handles
+//   both. "Host Email" is omitted from MEETING INFO in this mode since the
+//   host already appears (with email, in virtually every real case) in this
+//   same list — including it too would risk a second, unmatched `people`
+//   row for the same human.
+// - Fallback (rec.participants empty/absent — the participants API call
+//   failed or was skipped): PARTICIPANTS is left with zero content lines,
+//   and "Host Email" carries the one participant we do know about, so the
+//   caller can still attribute a real {email} participant.
 function renderStructuredTranscript(rec: ZoomPendingExport): string {
   const sep = "=".repeat(60);
+  const hasFullParticipantList = (rec.participants ?? []).length > 0;
+
   const meetingInfoLines = [`Name: ${rec.topic}`, `Date/Time: ${rec.startTime}`];
   if (rec.durationMinutes != null) meetingInfoLines.push(`Duration: ${rec.durationMinutes}m`);
-  if (rec.hostEmail) meetingInfoLines.push(`Host Email: ${rec.hostEmail}`);
+  if (!hasFullParticipantList && rec.hostEmail) meetingInfoLines.push(`Host Email: ${rec.hostEmail}`);
   meetingInfoLines.push(`UUID: ${rec.zoomMeetingId}`);
+
+  const participantLines = hasFullParticipantList
+    ? rec.participants!.map((p) => (p.email ? `${p.name} <${p.email}>` : p.name))
+    : [];
 
   return [
     sep,
@@ -299,6 +317,7 @@ function renderStructuredTranscript(rec: ZoomPendingExport): string {
     sep,
     "PARTICIPANTS",
     sep,
+    ...participantLines,
     sep,
     "TRANSCRIPT",
     sep,

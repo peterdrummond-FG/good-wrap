@@ -25,6 +25,7 @@ export function registerZoomExportRoutes(app: FastifyInstance): void {
         startTime: schema.zoomPendingExports.startTime,
         durationMinutes: schema.zoomPendingExports.durationMinutes,
         hostEmail: schema.zoomPendingExports.hostEmail,
+        participants: schema.zoomPendingExports.participants,
         transcriptText: schema.zoomPendingExports.transcriptText,
       })
       .from(schema.zoomPendingExports)

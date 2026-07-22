@@ -52,6 +52,67 @@ export async function downloadRecordingFile(downloadUrl: string, accessToken: st
   return res.text();
 }
 
+// --- past-meeting participants ------------------------------------------------------
+// Fills in the full attendee list beyond just the host (recording.transcript_
+// completed's payload only reliably gives host_email — see
+// captureFromZoomWebhook.ts). Uses GET /past_meetings/{uuid}/participants
+// (the "Meetings" API, scope meeting:read:list_past_participants) — NOT the
+// separate /report/meetings/{id}/participants endpoint, which needs an
+// admin-only report:read:list_meeting_participants:admin scope unavailable
+// to a Server-to-Server app like this one. Trade-off accepted for that
+// reason: this endpoint returns id/name for every attendee but only
+// includes an email when Zoom is willing to disclose one (reliably true for
+// the host, sometimes true for other attendees on the same account —
+// external guests typically have name only, no join/leave times either).
+
+export interface ZoomPastParticipant {
+  id: string;
+  name: string;
+  user_email?: string;
+}
+
+interface ZoomPastParticipantsPage {
+  participants: ZoomPastParticipant[];
+  next_page_token?: string;
+}
+
+/** Zoom's documented gotcha: a meeting UUID that starts with `/` or contains
+ * `//` must be double-encoded as a path segment, or the request 404s. Always
+ * double-encoding is the standard workaround — harmless for UUIDs that
+ * don't hit that edge case, since Zoom decodes twice either way. */
+function encodeMeetingUuidForPath(zoomMeetingId: string): string {
+  return encodeURIComponent(encodeURIComponent(zoomMeetingId));
+}
+
+/** Fetches every attendee of a past meeting occurrence, paginating until
+ * exhausted. Callers should wrap this in a try/catch — a failure here (scope
+ * not actually granted, meeting not found, transient error) must never block
+ * capturing the transcript itself; fall back to host-only. */
+export async function listPastMeetingParticipants(
+  accessToken: string,
+  zoomMeetingId: string
+): Promise<ZoomPastParticipant[]> {
+  const encodedUuid = encodeMeetingUuidForPath(zoomMeetingId);
+  const participants: ZoomPastParticipant[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const url = new URL(`https://api.zoom.us/v2/past_meetings/${encodedUuid}/participants`);
+    url.searchParams.set("page_size", "300");
+    if (pageToken) url.searchParams.set("next_page_token", pageToken);
+
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) {
+      throw new Error(`Zoom past-meeting participants request failed (${res.status}): ${await res.text()}`);
+    }
+    const page = (await res.json()) as ZoomPastParticipantsPage;
+    participants.push(...(page.participants ?? []));
+    pageToken = page.next_page_token || undefined;
+  } while (pageToken);
+
+  return participants;
+}
+
 // --- VTT -> plain text -------------------------------------------------------------
 
 // Zoom's cloud-recording transcript file is WEBVTT: a "WEBVTT" header, cue

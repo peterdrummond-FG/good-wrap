@@ -24,6 +24,7 @@ import {
   getZoomAccessToken,
   downloadRecordingFile,
   parseVttToPlainText,
+  listPastMeetingParticipants,
   type ZoomWebhookEnvelope,
 } from "../integrations/zoom";
 
@@ -57,6 +58,17 @@ export async function handleZoomTranscriptEvent(payload: ZoomWebhookEnvelope): P
   const vtt = await downloadRecordingFile(transcriptFile.download_url, accessToken);
   const transcript = parseVttToPlainText(vtt);
 
+  // Best-effort — a failure here (scope issue, meeting not found, transient
+  // error) must never block capturing the transcript itself. Falls back to
+  // host-only (via hostEmail below) when this comes back empty/fails.
+  let participants: { name: string; email?: string }[] = [];
+  try {
+    const zoomParticipants = await listPastMeetingParticipants(accessToken, zoomMeetingId);
+    participants = zoomParticipants.map((p) => ({ name: p.name, email: p.user_email || undefined }));
+  } catch (err) {
+    console.error(`Zoom webhook: couldn't fetch participants for meeting ${zoomMeetingId}:`, (err as Error).message);
+  }
+
   // onConflictDoNothing (unique on zoomMeetingId) absorbs Zoom's own known
   // near-term webhook-retry behavior — a redelivered event just no-ops here
   // instead of staging a duplicate row.
@@ -68,6 +80,7 @@ export async function handleZoomTranscriptEvent(payload: ZoomWebhookEnvelope): P
       startTime: object.start_time ? new Date(object.start_time) : new Date(),
       durationMinutes: object.duration,
       hostEmail: object.host_email,
+      participants: participants.length > 0 ? participants : undefined,
       transcriptText: transcript,
     })
     .onConflictDoNothing({ target: schema.zoomPendingExports.zoomMeetingId })
