@@ -30,23 +30,36 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
    problem — they load `.env` themselves via `dotenv/config`, transitively
    imported through `src/db/client.ts`).
 
-1. Run `npm run scan-folder -- reconcile`. This un-claims any `.processing/`
+1. Run `npm run scan-folder -- pull-zoom`. This checks for any Zoom
+   transcripts staged by the webhook handler (a meeting whose recording
+   finished and whose transcript is ready) and writes each one as a `.txt`
+   into the watch folder — same as if Peter had dropped it in by hand. Prints
+   `{ "written": [filenames] }`.
+   - If it fails outright (network error, missing env var, non-2xx
+     response), note the failure in your final summary (step 6) but continue
+     to the next steps regardless — a Zoom-pull hiccup must never block
+     processing files already sitting in the folder.
+   - An empty `written` array is normal (nothing new from Zoom this run), not
+     an error.
+
+2. Run `npm run scan-folder -- reconcile`. This un-claims any `.processing/`
    file whose claim has gone stale (a previous run died mid-file — a Claude
    usage session-limit hit or a network drop, both real failure modes seen
    in practice) by moving it back to the top-level watch folder, so the next
    step picks it up as a fresh candidate. It's always safe to re-process an
    unclaimed file this way, even if the dead run's upload had actually
-   already succeeded before it crashed — the `sourceKey` dedup check in step
-   4c below turns a re-upload into a no-op instead of a duplicate meeting.
-   Prints `{ unclaimed: [{filename, staleForMs}], failedCount }`. Note any
-   `unclaimed` filenames and the `failedCount` (files already sitting in
-   `failed/`, awaiting Peter's manual fix) for your final summary in step 5.
+   already succeeded before it crashed — the `sourceKey`/`zoomMeetingId`
+   dedup checks in step 5c below turn a re-upload into a no-op instead of a
+   duplicate meeting. Prints `{ unclaimed: [{filename, staleForMs}], failedCount }`.
+   Note any `unclaimed` filenames and the `failedCount` (files already
+   sitting in `failed/`, awaiting Peter's manual fix) for your final summary
+   in step 6.
 
-2. Run `npm run scan-folder -- list`. This prints a JSON array of candidate
+3. Run `npm run scan-folder -- list`. This prints a JSON array of candidate
    filenames. If it's empty, say so and stop — nothing to do (but still
-   report the reconcile/failed counts from step 1 if either was nonzero).
+   report the reconcile/failed counts from step 2 if either was nonzero).
 
-3. Fetch context you'll need for insight generation, once per run (not per
+4. Fetch context you'll need for insight generation, once per run (not per
    file), using the base URL from step 0:
    - `curl -s "<GOODWRAP_API_BASE_URL>/api/me"` → the owner's name. Action
      items are THIS person's own tasks; follow-ups are never attributed to
@@ -59,7 +72,7 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
      each with a `slug`, `name`, and `aliases` — for classifying which
      company each meeting is about (see the **company** rule below).
 
-4. For each candidate filename, one at a time:
+5. For each candidate filename, one at a time:
 
    a. Run `npm run scan-folder -- claim "<filename>"`. This locks the file
       and prints `{ "rawText": "...", "parsed": {...} | null, "sourceKey": "..." }`.
@@ -77,6 +90,14 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       - `sourceKey` is already computed for you (a deterministic hash of
         `rawText`) — carry it through unchanged into the upload payload in
         step (c) below. Don't recompute or alter it.
+      - If `parsed.zoomUuid` is present, this file came from the `pull-zoom`
+        step — carry it through unchanged as `zoomMeetingId` in the upload
+        payload in step (c) below (omit the field entirely otherwise).
+      - If `parsed.hostEmail` is present (also only for a Zoom-pulled file,
+        whose PARTICIPANTS section is intentionally empty), use
+        `participants: [{"email": "<parsed.hostEmail>"}]` in step (c)'s
+        payload instead of `parsed.participants` — this gets a real matched
+        `people` row by email rather than a bare name string.
 
    b. Generate the 4 categories from the transcript body, following these
       rules exactly (same bar as the API-based path used for every other
@@ -128,7 +149,7 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
         over-generating for these two categories (not for takeaways, which
         stays exactly 5).
       - **company**: which ONE of the companies from `/api/companies` (step
-        3) this meeting is actually about — use its `slug`. Match on the
+        4) this meeting is actually about — use its `slug`. Match on the
         company's `name`, its `aliases`, attendee affiliations, or clear
         subject-matter context (e.g. product/program names unique to one
         company), not just a passing one-word mention. If the meeting is
@@ -146,17 +167,19 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       curl -s -X POST "<GOODWRAP_API_BASE_URL>/api/meetings/upload-processed" \
         -H "Content-Type: application/json" \
         -H "x-worker-key: <LOCAL_WORKER_API_KEY>" \
-        -d '{"topic": "...", "startTime": "...", "durationMinutes": ..., "participants": [...], "transcript": "...", "insights": {"keywords": [...], "takeaways": [{"text": "..."}], "actionItems": [{"text": "...", "urgency": "..."}], "followUps": [{"text": "...", "person": null, "urgency": "..."}], "company": "some-slug-or-unknown"}, "sourceKey": "<value from claim>"}'
+        -d '{"topic": "...", "startTime": "...", "durationMinutes": ..., "participants": [...], "transcript": "...", "insights": {"keywords": [...], "takeaways": [{"text": "..."}], "actionItems": [{"text": "...", "urgency": "..."}], "followUps": [{"text": "...", "person": null, "urgency": "..."}], "company": "some-slug-or-unknown"}, "sourceKey": "<value from claim>", "zoomMeetingId": "<parsed.zoomUuid, only if present>"}'
       ```
       (`takeaways`/`actionItems`/`followUps` entries take no `approved`
-      field — the server stamps that itself.) Write the JSON body to a temp
+      field — the server stamps that itself. Omit `zoomMeetingId` entirely
+      when `parsed.zoomUuid` wasn't present.) Write the JSON body to a temp
       file first (e.g. `/tmp/upload-payload.json`) and POST with `-d
       @/tmp/upload-payload.json` rather than inlining a large transcript
       directly on the command line.
 
       If the response includes `"alreadyCaptured": true`, this was a safe
       no-op — the meeting already existed from a prior run's upload that
-      succeeded before that run crashed (see step 1). Note it in your
+      succeeded before that run crashed (see step 2), or (for a Zoom file)
+      was already captured under its `zoomMeetingId`. Note it in your
       summary as "confirmed" rather than "created", but treat it the same as
       any other 2xx response for the `finish` step below.
 
@@ -172,7 +195,8 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       `npm run scan-folder -- finish "<filename>" failed --error "<what went wrong>"`
       (no `--date` here — `failed/` stays flat).
 
-5. Report a one-line summary: how many processed, how many failed and why,
-   how many were reconciled/retried in step 1 (and of those, how many turned
-   out to be `alreadyCaptured` no-ops vs. freshly created), and the
-   `failedCount` from step 1.
+6. Report a one-line summary: how many Zoom transcripts were pulled in step 1
+   (or that the pull failed/Zoom wasn't connected), how many processed, how
+   many failed and why, how many were reconciled/retried in step 2 (and of
+   those, how many turned out to be `alreadyCaptured` no-ops vs. freshly
+   created), and the `failedCount` from step 2.

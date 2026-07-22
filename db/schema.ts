@@ -185,6 +185,38 @@ export const workerApiKeys = pgTable(
   })
 );
 
+// --- zoom_pending_exports ----------------------------------------------------------
+// Staging queue between the Zoom webhook (src/ingest/captureFromZoomWebhook.ts)
+// and the local watch-folder pull (src/ingest/scanFolder.ts's `pull-zoom`
+// subcommand). The webhook only downloads + converts a transcript and inserts
+// a row here — it no longer calls captureManualMeeting/runFullPipeline
+// directly, since TRANSCRIPT_WATCH_DIR only exists on the local Mac this
+// Railway-hosted webhook can't reach. A row is deleted only once the local
+// pull step has confirmed writing it to disk (see routes/zoomExports.ts's
+// DELETE /api/zoom/pending-exports/:id) — a two-step fetch-then-confirm, not
+// fetch-and-delete-in-one-call, so a crash between the two can't silently
+// lose a transcript.
+export const zoomPendingExports = pgTable(
+  "zoom_pending_exports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    // Zoom's per-occurrence uuid — unique so a retried webhook delivery
+    // (Zoom is known to redeliver) can't stage the same recording twice.
+    zoomMeetingId: text("zoom_meeting_id").notNull(),
+    topic: text("topic").notNull(),
+    startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+    durationMinutes: integer("duration_minutes"),
+    hostEmail: text("host_email"),
+    transcriptText: text("transcript_text").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    zoomMeetingIdUnique: uniqueIndex("zoom_pending_exports_zoom_meeting_id_unique").on(
+      table.zoomMeetingId
+    ),
+  })
+);
+
 // --- people --------------------------------------------------------------------
 // Normalized identity for anyone who appears as a meeting participant (not
 // necessarily a system user). Keyed on email when known, but email is optional:

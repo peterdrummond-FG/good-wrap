@@ -12,6 +12,23 @@
 // all.
 //
 // Subcommands (run via `npm run scan-folder -- <subcommand> ...`):
+//   pull-zoom                     -> fetches any Zoom transcripts staged by
+//                                     the webhook handler
+//                                     (src/ingest/captureFromZoomWebhook.ts,
+//                                     GET /api/zoom/pending-exports) and
+//                                     writes each as a structured .txt into
+//                                     the watch folder — same as if Peter had
+//                                     dropped it in by hand. Confirms each
+//                                     write by calling
+//                                     DELETE /api/zoom/pending-exports/:id
+//                                     only after the file is safely on disk,
+//                                     so a crash between fetch and write
+//                                     can't lose a transcript (it's just
+//                                     fetched again next run). Prints
+//                                     { written: [filenames] }. A failure
+//                                     here (network error, missing env var)
+//                                     must never prevent the subcommands
+//                                     below from running — see SKILL.md.
 //   list                          -> JSON array of candidate filenames
 //   claim <file>                  -> claims the file (locks it), prints
 //                                     { rawText, parsed, sourceKey } as JSON.
@@ -218,12 +235,145 @@ async function cmdReconcile(watchDir: string): Promise<void> {
   console.log(JSON.stringify({ unclaimed, failedCount }));
 }
 
+// --- pull-zoom ---------------------------------------------------------------------
+// Bridges the Zoom webhook's staging queue (zoom_pending_exports, populated
+// by src/ingest/captureFromZoomWebhook.ts) into the watch folder. Runs before
+// reconcile/list/claim in the process-transcripts skill's own run, so a
+// freshly-written Zoom file is picked up in the same cycle. See
+// src/server/routes/zoomExports.ts for the two endpoints this talks to.
+
+interface ZoomPendingExport {
+  id: string;
+  zoomMeetingId: string;
+  topic: string;
+  startTime: string;
+  durationMinutes?: number;
+  hostEmail?: string;
+  transcriptText: string;
+}
+
+function sanitizeTopicForFilename(topic: string): string {
+  const slug = topic
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+  return slug || "meeting";
+}
+
+// Zoom UUIDs contain `/`, `+`, `=` — unsafe/ambiguous raw in a filename.
+// base64url-encoding it again gives a short, filesystem-safe, deterministic
+// token so a file can be traced back to its zoomMeetingId without decoding.
+function zoomMeetingIdToken(zoomMeetingId: string): string {
+  return Buffer.from(zoomMeetingId, "utf-8").toString("base64url").slice(0, 16);
+}
+
+function formatDateForFilename(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+function buildZoomFilename(rec: ZoomPendingExport): string {
+  const token = zoomMeetingIdToken(rec.zoomMeetingId);
+  return `zoom_${sanitizeTopicForFilename(rec.topic)}_${formatDateForFilename(rec.startTime)}_${token}.txt`;
+}
+
+// Matches parseStructuredTranscript.ts's exact recognized shape. PARTICIPANTS
+// is deliberately left with zero content lines — the host email travels as
+// a "Host Email" field in MEETING INFO instead (see that file's comment),
+// so the caller can attribute a real {email} participant rather than a bare
+// name string that would create a second, unmatched `people` row.
+function renderStructuredTranscript(rec: ZoomPendingExport): string {
+  const sep = "=".repeat(60);
+  const meetingInfoLines = [`Name: ${rec.topic}`, `Date/Time: ${rec.startTime}`];
+  if (rec.durationMinutes != null) meetingInfoLines.push(`Duration: ${rec.durationMinutes}m`);
+  if (rec.hostEmail) meetingInfoLines.push(`Host Email: ${rec.hostEmail}`);
+  meetingInfoLines.push(`UUID: ${rec.zoomMeetingId}`);
+
+  return [
+    sep,
+    "MEETING INFO",
+    sep,
+    ...meetingInfoLines,
+    sep,
+    "PARTICIPANTS",
+    sep,
+    sep,
+    "TRANSCRIPT",
+    sep,
+    rec.transcriptText,
+  ].join("\n");
+}
+
+// Only the two places an unprocessed file could still be sitting — NOT
+// processed/ or failed/ (those are the upload-processed route's job to
+// dedup via zoomMeetingId; scanning years of archived weekly buckets every
+// 20 min would be needless I/O for a case the server already handles).
+async function collectExistingZoomFilenameTokens(watchDir: string): Promise<Set<string>> {
+  const dirs = [watchDir, path.join(watchDir, PROCESSING_DIR)];
+  const filenames: string[] = [];
+  for (const dir of dirs) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".txt")) filenames.push(entry.name);
+    }
+  }
+  return new Set(filenames);
+}
+
+async function cmdPullZoom(watchDir: string): Promise<void> {
+  const apiBaseUrl = requireEnv("GOODWRAP_API_BASE_URL");
+  const workerKey = requireEnv("LOCAL_WORKER_API_KEY");
+
+  const res = await fetch(`${apiBaseUrl}/api/zoom/pending-exports`, {
+    headers: { "x-worker-key": workerKey },
+  });
+  if (!res.ok) {
+    throw new Error(`Zoom pull failed (${res.status}): ${await res.text()}`);
+  }
+  const { pendingExports } = (await res.json()) as { pendingExports: ZoomPendingExport[] };
+
+  const existingFilenames = await collectExistingZoomFilenameTokens(watchDir);
+  const written: string[] = [];
+
+  for (const rec of pendingExports) {
+    const token = zoomMeetingIdToken(rec.zoomMeetingId);
+    // Still sitting unprocessed from a prior pull whose delete-confirm call
+    // never landed — don't rewrite it, just retry the confirm.
+    const alreadyOnDisk = [...existingFilenames].some((f) => f.includes(token));
+    if (!alreadyOnDisk) {
+      const filename = buildZoomFilename(rec);
+      await writeFile(path.join(watchDir, filename), renderStructuredTranscript(rec), "utf-8");
+      written.push(filename);
+    }
+
+    const deleteRes = await fetch(`${apiBaseUrl}/api/zoom/pending-exports/${rec.id}`, {
+      method: "DELETE",
+      headers: { "x-worker-key": workerKey },
+    });
+    if (!deleteRes.ok && deleteRes.status !== 404) {
+      // The file is safely on disk either way — just log and move on rather
+      // than failing the whole run over one un-confirmed delete; the next
+      // pull will see the same alreadyOnDisk guard above and just retry the
+      // confirm without rewriting.
+      console.error(
+        `scanFolder: couldn't confirm pending export ${rec.id} as delivered (${deleteRes.status}) — will retry next run.`
+      );
+    }
+  }
+
+  console.log(JSON.stringify({ written }));
+}
+
 async function main() {
   const watchDir = requireEnv("TRANSCRIPT_WATCH_DIR");
   await ensureSubdirs(watchDir);
 
   const [subcommand, ...args] = process.argv.slice(2);
   switch (subcommand) {
+    case "pull-zoom":
+      return cmdPullZoom(watchDir);
     case "list":
       return cmdList(watchDir);
     case "claim":
@@ -233,7 +383,9 @@ async function main() {
     case "reconcile":
       return cmdReconcile(watchDir);
     default:
-      throw new Error(`Unknown subcommand "${subcommand ?? ""}". Expected one of: list, claim, finish, reconcile.`);
+      throw new Error(
+        `Unknown subcommand "${subcommand ?? ""}". Expected one of: pull-zoom, list, claim, finish, reconcile.`
+      );
   }
 }
 

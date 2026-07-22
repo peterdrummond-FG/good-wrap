@@ -14,6 +14,7 @@ import {
   deleteFollowUp,
   deleteMeeting,
   findMeetingBySourceKey,
+  findMeetingByZoomMeetingId,
   getMeetingDetail,
   getPersonDetail,
   isMeetingOwnedBy,
@@ -56,6 +57,7 @@ import { requireAuth, requireAdmin } from "./auth";
 import { registerIntegrationsRoutes, registerIntegrationCallbackRoute } from "./routes/integrations";
 import { registerWorkerKeyRoutes } from "./routes/workerKeys";
 import { registerAdminRoutes } from "./routes/admin";
+import { registerZoomExportRoutes } from "./routes/zoomExports";
 
 // Fastify's default JSON parser only exposes the re-parsed object, not the
 // original bytes — augmented here so the Zoom webhook route (the one place
@@ -324,6 +326,12 @@ export function buildApp() {
         transcript?: string;
         insights?: ProcessedInsightsInput;
         sourceKey?: string;
+        // Set only when this upload originated from scanFolder.ts's
+        // `pull-zoom` subcommand (Zoom's per-occurrence uuid, carried through
+        // from the structured .txt file's "UUID" line — see
+        // parseStructuredTranscript.ts). Distinct dedup key from sourceKey
+        // below, checked first — see findMeetingByZoomMeetingId's own comment.
+        zoomMeetingId?: string;
       };
     }>("/api/meetings/upload-processed", async (req, reply) => {
       const body = req.body ?? {};
@@ -331,6 +339,19 @@ export function buildApp() {
         return reply
           .code(400)
           .send({ error: "topic, startTime, transcript, and insights are all required." });
+      }
+
+      // Zoom dedup check (added alongside the Zoom-pull watch-folder bridge)
+      // — checked before sourceKey below since a re-pulled Zoom transcript's
+      // content could differ slightly (renamed topic, edited transcript) and
+      // wouldn't otherwise be caught by a content hash. Mirrors the same
+      // check captureFromZoomWebhook.ts does before staging.
+      if (body.zoomMeetingId) {
+        const existing = await findMeetingByZoomMeetingId(body.zoomMeetingId);
+        if (existing) {
+          const meeting = await getMeetingDetail(existing.id);
+          return reply.code(200).send({ meetingId: existing.id, alreadyCaptured: true, meeting });
+        }
       }
 
       // Dedup check (added 2026-07-20, folder-scan reliability pass) — if the
@@ -356,7 +377,8 @@ export function buildApp() {
         durationMinutes: body.durationMinutes,
         participants: body.participants ?? [],
         transcript: body.transcript,
-        source: "upload",
+        source: body.zoomMeetingId ? "zoom" : "upload",
+        zoomMeetingId: body.zoomMeetingId,
         sourceKey: body.sourceKey,
         ownerEmail: req.currentUser!.email,
       });
@@ -655,6 +677,7 @@ export function buildApp() {
     // powers the Account page (see routes/integrations.ts, routes/workerKeys.ts).
     registerIntegrationsRoutes(instance);
     registerWorkerKeyRoutes(instance);
+    registerZoomExportRoutes(instance);
 
     // Admin-only: inviting teammates, offboarding (see routes/admin.ts).
     instance.register(async (adminInstance) => {

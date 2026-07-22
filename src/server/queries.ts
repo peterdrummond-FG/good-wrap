@@ -398,6 +398,20 @@ export async function findMeetingBySourceKey(sourceKey: string): Promise<{ id: s
   return existing ?? null;
 }
 
+// Same idea as findMeetingBySourceKey above, keyed on Zoom's own uuid instead
+// — used by upload-processed (app.ts) when a folder-scan file originated from
+// the Zoom pull step (src/ingest/scanFolder.ts's `pull-zoom`) and carries a
+// zoomMeetingId, so a re-delivered/re-pulled transcript is detected as
+// already captured instead of creating a duplicate meeting.
+export async function findMeetingByZoomMeetingId(zoomMeetingId: string): Promise<{ id: string } | null> {
+  const [existing] = await db
+    .select({ id: schema.meetings.id })
+    .from(schema.meetings)
+    .where(eq(schema.meetings.zoomMeetingId, zoomMeetingId))
+    .limit(1);
+  return existing ?? null;
+}
+
 export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail | null> {
   const [row] = await db
     .select({
