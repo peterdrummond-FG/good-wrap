@@ -178,9 +178,15 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
       (`takeaways`/`actionItems`/`followUps` entries take no `approved`
       field — the server stamps that itself. Omit `zoomMeetingId` entirely
       when `parsed.zoomUuid` wasn't present.) Write the JSON body to a temp
-      file first (e.g. `/tmp/upload-payload.json`) and POST with `-d
-      @/tmp/upload-payload.json` rather than inlining a large transcript
-      directly on the command line.
+      file first — get a fresh, unique path with `mktemp` (e.g. `payload=$(mktemp
+      /tmp/upload-payload.XXXXXX.json)`), never a fixed name like
+      `/tmp/upload-payload.json` — and POST with `-d @"$payload"` rather than
+      inlining a large transcript directly on the command line. `/tmp` is
+      shared across every run of this skill (this one included), so a fixed
+      filename left over from a previous run/day is exactly the kind of stale
+      state that's caused this skill to second-guess itself before — always
+      use a fresh path, and `rm -f "$payload"` once the POST completes
+      (success or failure) so nothing lingers for the next run to trip over.
 
       If the response includes `"alreadyCaptured": true`, this was a safe
       no-op — the meeting already existed from a prior run's upload that
@@ -206,3 +212,13 @@ Run from the repo root (`good-wrap/`). Requires `TRANSCRIPT_WATCH_DIR`,
    many failed and why, how many were reconciled/retried in step 2 (and of
    those, how many turned out to be `alreadyCaptured` no-ops vs. freshly
    created), and the `failedCount` from step 2.
+
+7. Before finishing, re-run `npm run scan-folder -- list` one last time and
+   base your summary's "nothing to do" / "all caught up" claim only on that
+   command's actual output from *this* invocation — never on a memory of a
+   previous run. Each `claude -p` invocation of this skill is a brand-new,
+   isolated session with no access to any earlier run's context (there is no
+   "earlier in this session" or "before this session picked back up" for a
+   `-p` call — if that phrasing seems apt, it's a sign something was assumed
+   rather than actually re-checked here). If this final `list` isn't empty,
+   go back to step 5 for the remaining files rather than reporting completion.

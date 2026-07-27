@@ -24,6 +24,7 @@ import {
   listMeetings,
   listPeople,
   sendActionItemToAsana,
+  unsendActionItemFromAsana,
   setActionItemDone,
   setFollowUpDone,
   setMeetingCompany,
@@ -523,6 +524,33 @@ export function buildApp() {
         }
         const meeting = await getMeetingDetail(req.params.id);
         return reply.send({ ...result, meeting });
+      }
+    );
+
+    // "Unsend" — deletes the actual Asana task and clears the local link, so
+    // the item goes back to showing the "Send to Asana" button (see
+    // unsendActionItemFromAsana in queries.ts). No-op (200) if it was never
+    // sent in the first place.
+    instance.delete<{ Params: { id: string; index: string } }>(
+      "/api/meetings/:id/action-items/:index/send-to-asana",
+      async (req, reply) => {
+        const index = parseIndexParam(req.params.index);
+        if (index === null) {
+          return reply
+            .code(400)
+            .send({ error: `index must be a non-negative integer, got: ${req.params.index}` });
+        }
+        if (!(await isMeetingOwnedBy(req.params.id, req.currentUser!.id))) {
+          return reply.code(404).send({ error: `No meeting found for id ${req.params.id}` });
+        }
+        const ok = await unsendActionItemFromAsana(req.params.id, index, req.currentUser!.id);
+        if (!ok) {
+          return reply
+            .code(404)
+            .send({ error: `No action item found at index ${index} for meeting ${req.params.id}` });
+        }
+        const meeting = await getMeetingDetail(req.params.id);
+        return reply.send({ meeting });
       }
     );
 

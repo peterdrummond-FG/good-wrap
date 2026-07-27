@@ -20,6 +20,7 @@
           <q-tab name="integrations" label="Integrations" />
           <q-tab name="local-setup" label="Local Setup" />
           <q-tab v-if="isAdmin" name="team" label="Team" />
+          <q-tab v-if="isAdmin" name="companies" label="Companies" />
         </q-tabs>
         <q-separator class="q-mb-md" />
 
@@ -130,6 +131,41 @@
             </div>
             <q-inner-loading :showing="usersLoading" />
           </q-tab-panel>
+
+          <!-- Companies (admin-only) ----------------------------------------------- -->
+          <q-tab-panel v-if="isAdmin" name="companies" class="q-px-none">
+            <div class="text-grey-6 q-mb-md">
+              Add a company (e.g. an outside vendor like Domo) so you can tag meetings with it and
+              filter by it. Claude will start recognizing it in transcripts right away.
+            </div>
+
+            <div class="text-weight-medium q-mb-sm">Add a company</div>
+            <q-banner v-if="createCompanyError" class="bg-red-1 text-red-9 q-mb-md" rounded>{{ createCompanyError }}</q-banner>
+            <div class="row q-gutter-sm q-mb-lg items-start">
+              <q-input v-model="newCompanyName" dense filled label="Name" class="col" />
+              <q-input
+                v-model="newCompanyAliases"
+                dense
+                filled
+                label="Aliases (comma-separated, optional)"
+                class="col"
+              />
+              <q-btn unelevated color="primary" no-caps label="Add" :loading="creatingCompany" @click="addCompany" />
+            </div>
+
+            <div class="text-weight-medium q-mb-sm">Existing companies</div>
+            <q-banner v-if="companiesError" class="bg-red-1 text-red-9 q-mb-md" rounded>{{ companiesError }}</q-banner>
+            <div v-for="company in companies" :key="company.id" class="bw-row row items-center q-gutter-sm no-wrap">
+              <div class="col">
+                <div class="text-weight-medium">
+                  {{ company.name }}
+                  <q-badge v-if="company.isInternal" color="primary" class="q-ml-xs">internal</q-badge>
+                </div>
+                <div class="text-caption text-grey-6">{{ company.slug }}</div>
+              </div>
+            </div>
+            <q-inner-loading :showing="companiesLoading" />
+          </q-tab-panel>
         </q-tab-panels>
       </template>
     </div>
@@ -142,6 +178,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useAuth } from "../composables/useAuth";
 import { useAsyncList } from "../composables/useAsyncList";
 import { useKeyedAsyncAction } from "../composables/useKeyedAsyncAction";
+import { useCompanies } from "../composables/useCompanies";
 import IntegrationConnectCard from "../components/IntegrationConnectCard.vue";
 import {
   fetchIntegrations,
@@ -153,6 +190,7 @@ import {
   fetchAdminUsers,
   inviteUser,
   setUserDisabled,
+  createCompany,
   type IntegrationProviderName,
   type AdminUser,
 } from "../api";
@@ -302,5 +340,34 @@ async function toggleDisabled(user: AdminUser) {
   await disableAction.run(user.id, async () => {
     await setUserDisabled(user.id, !user.disabledAt);
   });
+}
+
+// --- Companies (admin-only) -----------------------------------------------------
+
+const { companies, loading: companiesLoading, error: companiesError, refetch: refetchCompanies } = useCompanies();
+
+const newCompanyName = ref("");
+const newCompanyAliases = ref("");
+const creatingCompany = ref(false);
+const createCompanyError = ref("");
+
+async function addCompany() {
+  if (!newCompanyName.value.trim()) return;
+  creatingCompany.value = true;
+  createCompanyError.value = "";
+  try {
+    const aliases = newCompanyAliases.value
+      .split(",")
+      .map((a) => a.trim())
+      .filter(Boolean);
+    await createCompany({ name: newCompanyName.value.trim(), aliases });
+    newCompanyName.value = "";
+    newCompanyAliases.value = "";
+    await refetchCompanies();
+  } catch (err) {
+    createCompanyError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    creatingCompany.value = false;
+  }
 }
 </script>

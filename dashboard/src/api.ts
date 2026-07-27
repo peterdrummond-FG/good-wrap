@@ -327,6 +327,12 @@ export function sendActionItemToAsana(id: string, index: number): Promise<SendAc
   return request(`/meetings/${id}/action-items/${index}/send-to-asana`, { method: "POST" });
 }
 
+// "Unsend" — deletes the actual Asana task and clears the local link, so the
+// item goes back to showing the "Send to Asana" button.
+export function unsendActionItemFromAsana(id: string, index: number): Promise<{ meeting: MeetingDetail }> {
+  return request(`/meetings/${id}/action-items/${index}/send-to-asana`, { method: "DELETE" });
+}
+
 // Toggles done — greys the item out but keeps it listed (delete below
 // removes it outright). `index` is this item's position in the meeting's
 // own actionItems/followUps array.
@@ -516,4 +522,12 @@ export function inviteUser(input: { name: string; email: string; role?: "admin" 
 
 export function setUserDisabled(id: string, disabled: boolean): Promise<{ ok: true }> {
   return request(`/admin/users/${id}/disabled`, { method: "POST", body: JSON.stringify({ disabled }) });
+}
+
+// --- Companies (admin-only create) --------------------------------------------------
+
+// Slug is derived server-side from `name` (see createCompany in
+// src/server/queries.ts) — not settable here.
+export function createCompany(input: { name: string; aliases?: string[] }): Promise<{ company: Company }> {
+  return request("/admin/companies", { method: "POST", body: JSON.stringify(input) });
 }

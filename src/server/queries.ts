@@ -5,7 +5,7 @@ import { and, desc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { db, schema } from "../db/client";
 import type { ActionItem, FollowUpItem, SuggestionItem, Urgency } from "../../db/schema";
 import { resolveParticipantIds, type CaptureParticipantInput } from "../ingest/captureManualMeeting";
-import { createAsanaTask } from "../integrations/asana";
+import { createAsanaTask, deleteAsanaTask } from "../integrations/asana";
 import { getValidAccessToken } from "../integrations/oauth/tokenStore";
 
 // --- companies (added 2026-07-17, see db/schema.ts's companies comment) ----------
@@ -38,6 +38,39 @@ export interface CompanyRef {
   id: string;
   name: string;
   slug: string;
+}
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Admin-only "add a company" (see routes/admin.ts) — e.g. an outside vendor
+ * Peter wants to filter meetings by. Slug is derived from `name` (also used
+ * as the logo filename, see db/schema.ts's companies comment); returns null
+ * if that slug is already taken so the route can 409 instead of silently
+ * clobbering an existing company. */
+export async function createCompany(input: {
+  name: string;
+  aliases?: string[];
+}): Promise<CompanyListItem | null> {
+  const slug = slugify(input.name);
+  const [row] = await db
+    .insert(schema.companies)
+    .values({ name: input.name, slug, aliases: input.aliases ?? [] })
+    .onConflictDoNothing({ target: schema.companies.slug })
+    .returning({
+      id: schema.companies.id,
+      name: schema.companies.name,
+      slug: schema.companies.slug,
+      aliases: schema.companies.aliases,
+      isInternal: schema.companies.isInternal,
+    });
+  if (!row) return null;
+  return { ...row, aliases: row.aliases ?? [] };
 }
 
 /** Manual re-tag from the meeting detail page — always wins going forward.
@@ -865,6 +898,41 @@ export async function sendActionItemToAsana(
     .where(eq(schema.meetingInsights.id, insightsRow.id));
 
   return { taskGid, alreadySent: false };
+}
+
+/**
+ * "Unsend" — deletes the actual Asana task (not just the local link to it)
+ * and clears the item's asanaTaskGid, so it goes back to showing the "Send
+ * to Asana" button instead of the sent indicator. Uses the same acting-user
+ * access token fallback as sendActionItemToAsana above.
+ *
+ * A no-op (returns true without calling Asana) if the item was never sent —
+ * nothing to unsend. Returns false if the meeting/insights don't exist, or
+ * index is out of range (caller should 404 either way).
+ */
+export async function unsendActionItemFromAsana(
+  meetingId: string,
+  index: number,
+  actingUserId: string
+): Promise<boolean> {
+  const row = await loadMeetingInsightsRow(meetingId);
+  if (!row) return false;
+
+  const actionItems = normalizeActionItems(row.actionItems);
+  const item = actionItems[index];
+  if (!item) return false;
+  if (!item.asanaTaskGid) return true;
+
+  const accessToken = (await getValidAccessToken(actingUserId, "asana")) ?? undefined;
+  await deleteAsanaTask(item.asanaTaskGid, accessToken);
+
+  // Omit asanaTaskGid entirely rather than setting it to undefined — jsonb
+  // serialization would otherwise be relied on to drop an explicit undefined,
+  // which is easy to get wrong across a schema/driver change later.
+  const { asanaTaskGid: _sentGid, ...rest } = item;
+  actionItems[index] = rest;
+  await db.update(schema.meetingInsights).set({ actionItems }).where(eq(schema.meetingInsights.id, row.id));
+  return true;
 }
 
 /** Toggles one Action Item's done state — greys it out in the UI without

@@ -63,3 +63,23 @@ export async function createAsanaTask(input: CreateAsanaTaskInput): Promise<Crea
   const json = (await res.json()) as { data: { gid: string; permalink_url: string } };
   return { taskGid: json.data.gid, permalinkUrl: json.data.permalink_url };
 }
+
+/** "Unsend" — permanently deletes the Asana task itself (not just the local
+ * link to it), triggered by the meeting detail page's "Remove from Asana"
+ * action (see unsendActionItemFromAsana in queries.ts). Same acting-user
+ * access token fallback as createAsanaTask above. A 404 from Asana means the
+ * task is already gone (e.g. someone deleted it directly in Asana) — treated
+ * as success so the local asanaTaskGid still gets cleared either way. */
+export async function deleteAsanaTask(taskGid: string, accessToken?: string): Promise<void> {
+  const token = accessToken ?? requireEnv("ASANA_ACCESS_TOKEN");
+
+  const res = await fetch(`${ASANA_API_BASE}/tasks/${taskGid}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok && res.status !== 404) {
+    const body = await res.text();
+    throw new Error(`Asana task deletion failed (${res.status}): ${body}`);
+  }
+}

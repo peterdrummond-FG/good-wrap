@@ -65,10 +65,16 @@
             v-for="a in approvedActionItemsWithIndex"
             :key="a.index"
             class="row items-center justify-between q-gutter-x-xs"
-            :style="a.done ? 'opacity: 0.5' : ''"
+            :style="a.done || a.asanaTaskGid ? 'opacity: 0.5' : ''"
           >
             <span class="col">{{ a.text }}</span>
-            <span v-if="a.asanaTaskGid" class="bw-asana-sent">
+            <q-btn
+              v-if="a.asanaTaskGid"
+              flat round dense size="sm"
+              class="bw-asana-sent"
+              :loading="unsendingFromAsanaIndex === a.index"
+              @click="onUnsendFromAsana(a.index)"
+            >
               <img
                 v-if="!asanaIconFailed"
                 src="/logos/asana.png"
@@ -77,8 +83,8 @@
                 @error="asanaIconFailed = true"
               />
               <q-icon v-else name="check_circle" color="grey-6" size="16px" />
-              <q-tooltip>Sent to Asana</q-tooltip>
-            </span>
+              <q-tooltip>Sent to Asana — click to remove from Asana</q-tooltip>
+            </q-btn>
             <q-btn
               v-else
               flat round dense size="sm" icon="send" color="grey-5"
@@ -113,11 +119,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Notify } from "quasar";
+import { Dialog, Notify } from "quasar";
 import {
   deleteActionItem,
   regenerateInsightCategory,
   sendActionItemToAsana,
+  unsendActionItemFromAsana,
   setActionItemDone,
   type MeetingDetail,
   type Urgency,
@@ -179,6 +186,10 @@ const { activeKey: sendingToAsanaIndex, run: runAsanaAction } = useKeyedAsyncAct
   error,
   actionItemsReview.resetCopy
 );
+const { activeKey: unsendingFromAsanaIndex, run: runUnsendAsanaAction } = useKeyedAsyncAction(
+  error,
+  actionItemsReview.resetCopy
+);
 const { activeKey: togglingDoneKey, run: runToggleAction } = useKeyedAsyncAction(
   error,
   actionItemsReview.resetCopy
@@ -197,6 +208,22 @@ async function onSendToAsana(index: number) {
       type: "positive",
       message: result.alreadySent ? "Already sent to Asana" : "Sent to Asana",
       timeout: 2500,
+    });
+  });
+}
+
+function onUnsendFromAsana(index: number) {
+  Dialog.create({
+    title: "Remove from Asana?",
+    message: "This permanently deletes the task from Asana, not just the link shown here. This can't be undone.",
+    persistent: true,
+    ok: { label: "Remove", color: "negative", flat: true },
+    cancel: { label: "Cancel", flat: true },
+  }).onOk(async () => {
+    await runUnsendAsanaAction(index, async () => {
+      const result = await unsendActionItemFromAsana(props.meetingId, index);
+      emit("update:meeting", result.meeting);
+      Notify.create({ type: "positive", message: "Removed from Asana", timeout: 2500 });
     });
   });
 }

@@ -205,9 +205,11 @@ function buildRecordInsightsTool(companies: ExtractInsightsInput["companies"]): 
         type: "string",
         enum: [...companies.map((c) => c.slug), UNKNOWN_COMPANY],
         description:
-          "Which of the known companies this meeting is about, by slug. Use " +
-          `"${UNKNOWN_COMPANY}" only if the transcript gives no real signal either way — ` +
-          "prefer a genuine best guess over defaulting to unknown.",
+          "Which of the known companies this meeting is about, by slug. Only choose a company " +
+          "when the transcript gives clear, confident signal (an explicit company/product name, " +
+          `alias, or attendee affiliation). If it's ambiguous or the signal is weak, use ` +
+          `"${UNKNOWN_COMPANY}" rather than guessing — an incorrect guess is worse than leaving it ` +
+          "uncategorized.",
       },
     },
       required: ["keywords", "takeaways", "actionItems", "followUps", "company"],
@@ -271,8 +273,9 @@ function buildSystemPrompt(companies: ExtractInsightsInput["companies"]): string
   "Match on the company name, its alias(es), attendee affiliations, or clear subject-matter " +
   "context (e.g. product/program names unique to one company) — not just a passing one-word " +
   "mention. If the meeting is Flippen Group's own internal business (not about running any " +
-  `one portfolio company specifically), use whichever slug above is marked internal. Use ` +
-  `"${UNKNOWN_COMPANY}" only when the transcript genuinely gives no usable signal either way.`
+  `one portfolio company specifically), use whichever slug above is marked internal. If you're ` +
+  `not genuinely confident which company it is, use "${UNKNOWN_COMPANY}" rather than guessing — ` +
+  "an incorrect guess is worse than leaving it uncategorized."
   );
 }
 

@@ -9,6 +9,7 @@
 import type { FastifyInstance } from "fastify";
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "../../db/client";
+import { createCompany } from "../queries";
 
 export function registerAdminRoutes(app: FastifyInstance): void {
   // The entire invite mechanism: pre-create a `users` row with just a name +
@@ -99,5 +100,25 @@ export function registerAdminRoutes(app: FastifyInstance): void {
       return reply.code(404).send({ error: `No worker key found for id ${req.params.keyId}` });
     }
     return reply.code(204).send();
+  });
+
+  // Add a company to tag meetings against (e.g. an outside vendor like
+  // Domo) — see db/schema.ts's companies comment. Slug is derived from name
+  // in createCompany (queries.ts); a name that slugifies to an existing
+  // company's slug 409s rather than silently merging into it.
+  app.post<{ Body: { name?: string; aliases?: string[] } }>("/api/admin/companies", async (req, reply) => {
+    const name = req.body?.name?.trim();
+    if (!name) {
+      return reply.code(400).send({ error: "name is required." });
+    }
+    const aliases = Array.isArray(req.body?.aliases)
+      ? req.body.aliases.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+      : undefined;
+
+    const company = await createCompany({ name, aliases });
+    if (!company) {
+      return reply.code(409).send({ error: `A company matching "${name}" already exists.` });
+    }
+    return reply.code(201).send({ company });
   });
 }
